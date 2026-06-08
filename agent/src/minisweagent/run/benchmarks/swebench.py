@@ -17,6 +17,7 @@ from jinja2 import StrictUndefined, Template
 from rich.live import Live
 
 from minisweagent import Environment
+from minisweagent.agents import get_agent_class
 from minisweagent.config import builtin_config_dir, get_config_from_spec
 from minisweagent.environments import get_environment
 from minisweagent.models import get_model
@@ -144,12 +145,15 @@ def process_instance(
 
     try:
         env = get_sb_environment(config, instance)
-        agent = ProgressTrackingAgent(
+        agent_config = config.get("agent", {}).copy()
+        agent_class_spec = agent_config.pop("agent_class", "")
+        agent_class = get_agent_class(agent_class_spec) if agent_class_spec else ProgressTrackingAgent
+        agent = agent_class(
             model,
             env,
             progress_manager=progress_manager,
             instance_id=instance_id,
-            **config.get("agent", {}),
+            **agent_config,
         )
         info = agent.run(task)
         exit_status = info.get("exit_status")
