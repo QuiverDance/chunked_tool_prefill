@@ -1,6 +1,6 @@
 # SWE-bench Verified Qwen 27B Token Timing Setup
 
-Last updated: 2026-06-08T14:44:16Z
+Last updated: 2026-06-09T16:21:56Z
 
 This document summarizes the current experiment environment for running SWE-bench Verified with the local Qwen3.5-27B model through vLLM and mini SWE Agent.
 
@@ -30,14 +30,20 @@ The experiment records:
 ## Versions
 
 - mini SWE Agent: `2.3.0`
-- Current repo commit: `7e8ef4cf`
+- Current repo commit: `2395c9d`
 - vLLM env: `/home/pjw7200/chunked_tool_prefill/.conda/vllm-py312`
 - Python in vLLM env: `3.12.13`
-- vLLM: `0.20.2`
+- vLLM: `0.22.1`
 - PyTorch: `2.11.0+cu130`
 - CUDA visible to the vLLM env: available, 8 devices detected
 
-The vLLM environment uses Python 3.12. This avoids the earlier DeepGEMM/Python ABI mismatch seen in the Python 3.11 environment.
+The active vLLM servers run from the local conda Python 3.12 environment above. The start script points at:
+
+```text
+/home/pjw7200/chunked_tool_prefill/.conda/vllm-py312/bin/vllm
+```
+
+and launches vLLM with `CONDA_PREFIX`, `CONDA_DEFAULT_ENV`, `PATH`, and `PYTHONNOUSERSITE=1` set for that environment. This avoids the earlier DeepGEMM/Python ABI mismatch seen in the Python 3.11 environment.
 
 ## vLLM Server Setup
 
@@ -77,21 +83,27 @@ All other vLLM server options are left at vLLM defaults.
 
 Observed server state:
 
+- `/version` reports vLLM `0.22.1` on both ports
+- `/health` returns OK on both ports
 - `/v1/models` reports model id `qwen35-27b`
 - `/v1/models` reports `max_model_len: 262144`
 - engine dtype from vLLM logs: `torch.bfloat16`
+- quantization from vLLM logs: `None`
+- quantization config from vLLM logs: `None`
 - tensor parallel size: `1`
 - pipeline parallel size: `1`
 - data parallel size: `1`
 - prefix caching: `False`
 - chunked prefill: `True`
+- GPU memory utilization: `0.9200`
+- KV cache size: `1,766,757` tokens per server
 - seed: `0`
 
 ## Sampling Settings
 
-mini SWE Agent does not send `temperature`, `top_p`, or `top_k` in the current config.
+mini SWE Agent does not send `temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repetition_penalty`, or `frequency_penalty` in the current config.
 
-vLLM therefore applies the model `generation_config.json`:
+vLLM therefore applies the model `generation_config.json` for the sampling fields that are present there:
 
 ```json
 {
@@ -100,6 +112,15 @@ vLLM therefore applies the model `generation_config.json`:
   "top_k": 20,
   "top_p": 0.95
 }
+```
+
+For the remaining sampling parameters, vLLM uses its own defaults:
+
+```text
+min_p=0.0
+presence_penalty=0.0
+repetition_penalty=1.0
+frequency_penalty=0.0
 ```
 
 vLLM logs confirm:
@@ -212,6 +233,8 @@ Launcher:
 ./scripts/run_verified_token_timing.sh
 ```
 
+The launcher expects `mini-extra` to be available on `PATH`. In the current default shell, `mini-extra` is not resolved yet, so activate or install the mini SWE Agent CLI environment before running this script.
+
 It runs:
 
 ```bash
@@ -283,4 +306,3 @@ reports/$RUN_NAME/tool_calls.csv
    ```bash
    less reports/<run_name>/summary.json
    ```
-
