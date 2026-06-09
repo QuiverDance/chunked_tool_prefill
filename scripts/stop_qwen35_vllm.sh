@@ -22,9 +22,9 @@ stop_server() {
   fi
 
   kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid"
+  rm -f "$pid_file"
   echo "stopped $name with pid $pid"
 }
 
 stop_server qwen35-27b-gpu0
 stop_server qwen35-27b-gpu1
-
