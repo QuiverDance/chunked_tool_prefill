@@ -18,6 +18,7 @@ stop_server() {
 
   if ! kill -0 "$pid" 2>/dev/null; then
     echo "$name is not running"
+    rm -f "$pid_file"
     return
   fi
 
