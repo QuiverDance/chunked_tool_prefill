@@ -248,7 +248,10 @@ def shell_tokens(command: str) -> list[str]:
     try:
         return list(lexer)
     except ValueError:
-        return shlex.split(command, comments=False, posix=False)
+        try:
+            return shlex.split(command, comments=False, posix=False)
+        except ValueError:
+            return command.split()
 
 
 def is_compound_shell(command: str) -> bool:

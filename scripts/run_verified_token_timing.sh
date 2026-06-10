@@ -7,7 +7,16 @@ RUN_DIR="$ROOT_DIR/runs/$RUN_NAME"
 REPORT_DIR="$ROOT_DIR/reports/$RUN_NAME"
 BASE_CONFIG="$ROOT_DIR/agent/src/minisweagent/config/benchmarks/swebench.yaml"
 TOKEN_TIMING_CONFIG="$ROOT_DIR/agent/src/minisweagent/config/benchmarks/swebench_token_timing.yaml"
+MINI_EXTRA="${MINI_EXTRA:-$ROOT_DIR/.conda/miniswe-py311/bin/mini-extra}"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.conda/miniswe-py311/bin/python}"
 export DOCKER_HOST="${DOCKER_HOST:-tcp://127.0.0.1:2375}"
+
+if [[ ! -x "$MINI_EXTRA" ]]; then
+  MINI_EXTRA="mini-extra"
+fi
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python"
+fi
 
 mkdir -p "$RUN_DIR/gpu0" "$RUN_DIR/gpu1" "$REPORT_DIR"
 
@@ -23,7 +32,7 @@ run_half() {
   local output_dir="$RUN_DIR/$label"
   local log_file="$output_dir/launcher.log"
 
-  mini-extra swebench \
+  "$MINI_EXTRA" swebench \
     --subset verified \
     --split test \
     --slice "$slice_spec" \
@@ -32,6 +41,7 @@ run_half() {
     --config "$BASE_CONFIG" \
     --config "$TOKEN_TIMING_CONFIG" \
     --config "model.model_kwargs.api_base=http://127.0.0.1:${port}/v1" \
+    --config "run.remove_docker_image_after_instance=true" \
     > "$log_file" 2>&1
 }
 
@@ -57,6 +67,6 @@ status=0
 wait "$pid0" || status=1
 wait "$pid1" || status=1
 
-python "$ROOT_DIR/scripts/summarize_token_timing.py" "$RUN_DIR" --output-dir "$REPORT_DIR"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/summarize_token_timing.py" "$RUN_DIR" --output-dir "$REPORT_DIR"
 
 exit "$status"
