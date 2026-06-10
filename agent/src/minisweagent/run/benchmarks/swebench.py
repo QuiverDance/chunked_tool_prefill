@@ -7,6 +7,7 @@ import concurrent.futures
 import json
 import random
 import re
+import subprocess
 import threading
 import time
 import traceback
@@ -120,6 +121,85 @@ def remove_from_preds_file(output_path: Path, instance_id: str):
             output_path.write_text(json.dumps(output_data, indent=2))
 
 
+def truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def docker_executable_from_env(env: Environment | None, config: dict) -> str:
+    env_config = getattr(env, "config", None)
+    if env_config is not None and getattr(env_config, "executable", None):
+        return env_config.executable
+    return config.get("environment", {}).get("executable", "docker")
+
+
+def cleanup_environment(env: Environment | None, instance_id: str) -> None:
+    if env is None:
+        return
+    container_id = getattr(env, "container_id", None)
+    if not container_id:
+        cleanup = getattr(env, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
+        return
+
+    executable = docker_executable_from_env(env, {})
+    try:
+        result = subprocess.run(
+            [executable, "rm", "-f", container_id],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to remove Docker container for {instance_id}: {e}")
+        return
+
+    if result.returncode == 0:
+        logger.info(f"Removed Docker container for {instance_id}: {container_id}")
+    else:
+        logger.warning(
+            f"Failed to remove Docker container for {instance_id}: {result.stderr or result.stdout}"
+        )
+    try:
+        env.container_id = None
+    except Exception:
+        pass
+
+
+def remove_docker_image_after_instance(config: dict, env: Environment | None, instance: dict) -> None:
+    if not truthy(config.get("run", {}).get("remove_docker_image_after_instance", False)):
+        return
+    env_config = config.get("environment", {})
+    if env_config.get("environment_class", "docker") != "docker":
+        return
+
+    image_name = get_swebench_docker_image_name(instance)
+    executable = docker_executable_from_env(env, config)
+    try:
+        result = subprocess.run(
+            [executable, "rmi", image_name],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to remove Docker image after instance {instance['instance_id']}: {e}")
+        return
+
+    if result.returncode == 0:
+        logger.info(f"Removed Docker image after instance {instance['instance_id']}: {image_name}")
+    else:
+        logger.warning(
+            f"Failed to remove Docker image after instance {instance['instance_id']}: {result.stderr or result.stdout}"
+        )
+
+
 def process_instance(
     instance: dict,
     output_dir: Path,
@@ -139,6 +219,7 @@ def process_instance(
     progress_manager.update_instance_status(instance_id, "Pulling/starting environment")
 
     agent = None
+    env = None
     exit_status = None
     result = None
     extra_info = {}
@@ -177,6 +258,8 @@ def process_instance(
                 },
             )
             logger.info(f"Saved trajectory to '{traj_path}'")
+        cleanup_environment(env, instance_id)
+        remove_docker_image_after_instance(config, env, instance)
         update_preds_file(output_dir / "preds.json", instance_id, model.config.model_name, result)
         progress_manager.on_instance_end(instance_id, exit_status)
 

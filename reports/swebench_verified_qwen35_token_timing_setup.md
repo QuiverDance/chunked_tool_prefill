@@ -233,7 +233,13 @@ Launcher:
 ./scripts/run_verified_token_timing.sh
 ```
 
-The launcher expects `mini-extra` to be available on `PATH`. In the current default shell, `mini-extra` is not resolved yet, so activate or install the mini SWE Agent CLI environment before running this script.
+The launcher uses the local mini SWE Agent CLI environment by default:
+
+```text
+/home/pjw7200/chunked_tool_prefill/.conda/miniswe-py311/bin/mini-extra
+```
+
+You can override it with `MINI_EXTRA=/path/to/mini-extra`. If the local executable is missing, the script falls back to `mini-extra` on `PATH`.
 
 It runs:
 
@@ -243,8 +249,11 @@ mini-extra swebench \
   --split test \
   --workers 1 \
   --config swebench.yaml \
-  --config swebench_token_timing.yaml
+  --config swebench_token_timing.yaml \
+  --config run.remove_docker_image_after_instance=true
 ```
+
+The Docker backend starts each SWE-bench environment with `--rm`, so containers are removed after they stop. The additional `run.remove_docker_image_after_instance=true` setting makes the runner remove the corresponding `swebench/sweb.eval...` Docker image after each instance finishes. This keeps the full 500-instance run from retaining hundreds of large eval images on disk.
 
 Split:
 

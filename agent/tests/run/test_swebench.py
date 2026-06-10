@@ -1,5 +1,6 @@
 import json
 import re
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -8,9 +9,11 @@ from pydantic import BaseModel
 from minisweagent import package_dir
 from minisweagent.models.test_models import DeterministicModel, make_output
 from minisweagent.run.benchmarks.swebench import (
+    cleanup_environment,
     filter_instances,
     get_swebench_docker_image_name,
     main,
+    remove_docker_image_after_instance,
     remove_from_preds_file,
     update_preds_file,
 )
@@ -101,6 +104,44 @@ def test_get_image_name_with_complex_instance_id():
     instance = {"instance_id": "project__sub__module__version__1.2.3"}
     expected = "docker.io/swebench/sweb.eval.x86_64.project_1776_sub_1776_module_1776_version_1776_1.2.3:latest"
     assert get_swebench_docker_image_name(instance) == expected
+
+
+def test_cleanup_environment_removes_container(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    env = SimpleNamespace(container_id="container-123", config=SimpleNamespace(executable="dockerx"))
+    monkeypatch.setattr("minisweagent.run.benchmarks.swebench.subprocess.run", fake_run)
+
+    cleanup_environment(env, "instance-1")
+
+    assert calls == [["dockerx", "rm", "-f", "container-123"]]
+    assert env.container_id is None
+
+
+def test_remove_docker_image_after_instance_is_opt_in(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    env = SimpleNamespace(config=SimpleNamespace(executable="dockerx"))
+    instance = {"instance_id": "django__django-17087"}
+    monkeypatch.setattr("minisweagent.run.benchmarks.swebench.subprocess.run", fake_run)
+
+    remove_docker_image_after_instance({"environment": {"environment_class": "docker"}}, env, instance)
+    assert calls == []
+
+    remove_docker_image_after_instance(
+        {"run": {"remove_docker_image_after_instance": True}, "environment": {"environment_class": "docker"}},
+        env,
+        instance,
+    )
+    assert calls == [["dockerx", "rmi", "docker.io/swebench/sweb.eval.x86_64.django_1776_django-17087:latest"]]
 
 
 def test_filter_instances_no_filters():
