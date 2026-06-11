@@ -3,6 +3,7 @@ import os
 import platform
 import shlex
 import subprocess
+import time
 import uuid
 from typing import Any
 
@@ -35,6 +36,10 @@ class DockerEnvironmentConfig(BaseModel):
     """Max duration to keep container running. Uses the same format as the sleep command."""
     pull_timeout: int = 120
     """Timeout in seconds for pulling images."""
+    start_attempts: int = 3
+    """Number of attempts to start the container."""
+    start_retry_sleep: int = 5
+    """Seconds to wait before retrying a failed container start."""
     interpreter: list[str] = ["bash", "-lc"]
     """Interpreter to use to execute commands. Default is ["bash", "-lc"].
     The actual command will be appended as argument to this. Override this to e.g., modify shell flags
@@ -73,30 +78,57 @@ class DockerEnvironment:
 
     def _start_container(self):
         """Start the Docker container and return the container ID."""
-        container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
-        cmd = [
-            self.config.executable,
-            "run",
-            "-d",
-            "--name",
-            container_name,
-            "-w",
-            self.config.cwd,
-            *self.config.run_args,
-            self.config.image,
-            "sleep",
-            self.config.container_timeout,
-        ]
-        self.logger.debug(f"Starting container with command: {shlex.join(cmd)}")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=self.config.pull_timeout,  # docker pull might take a while
-            check=True,
-        )
-        self.logger.info(f"Started container {container_name} with ID {result.stdout.strip()}")
-        self.container_id = result.stdout.strip()
+        attempts = max(1, self.config.start_attempts)
+        last_error: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
+            cmd = [
+                self.config.executable,
+                "run",
+                "-d",
+                "--name",
+                container_name,
+                "-w",
+                self.config.cwd,
+                *self.config.run_args,
+                self.config.image,
+                "sleep",
+                self.config.container_timeout,
+            ]
+            self.logger.debug(f"Starting container with command: {shlex.join(cmd)}")
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.config.pull_timeout,  # docker pull might take a while
+                    check=True,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                last_error = e
+                stdout = getattr(e, "stdout", "") or ""
+                stderr = getattr(e, "stderr", "") or ""
+                self.logger.warning(
+                    "Failed to start container %s on attempt %s/%s with command %s\nstdout:\n%s\nstderr:\n%s",
+                    container_name,
+                    attempt,
+                    attempts,
+                    shlex.join(cmd),
+                    stdout.strip(),
+                    stderr.strip(),
+                )
+                if attempt < attempts:
+                    time.sleep(self.config.start_retry_sleep)
+                    continue
+                raise
+
+            self.logger.info(f"Started container {container_name} with ID {result.stdout.strip()}")
+            self.container_id = result.stdout.strip()
+            return
+
+        assert last_error is not None
+        raise last_error
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
         """Execute a command in the Docker container and return the result as a dict."""
