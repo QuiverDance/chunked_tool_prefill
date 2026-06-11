@@ -1,6 +1,6 @@
 # SWE-bench Verified Qwen 27B Token Timing Setup
 
-Last updated: 2026-06-09T16:21:56Z
+Last updated: 2026-06-10T05:45:00Z
 
 This document summarizes the current experiment environment for running SWE-bench Verified with the local Qwen3.5-27B model through vLLM and mini SWE Agent.
 
@@ -250,10 +250,13 @@ mini-extra swebench \
   --workers 1 \
   --config swebench.yaml \
   --config swebench_token_timing.yaml \
+  --config environment.pull_timeout=600 \
+  --config environment.start_attempts=3 \
+  --config environment.start_retry_sleep=10 \
   --config run.remove_docker_image_after_instance=true
 ```
 
-The Docker backend starts each SWE-bench environment with `--rm`, so containers are removed after they stop. The additional `run.remove_docker_image_after_instance=true` setting makes the runner remove the corresponding `swebench/sweb.eval...` Docker image after each instance finishes. This keeps the full 500-instance run from retaining hundreds of large eval images on disk.
+The Docker backend starts each SWE-bench environment with `--rm`, so containers are removed after they stop. The additional `run.remove_docker_image_after_instance=true` setting makes the runner remove the corresponding `swebench/sweb.eval...` Docker image after each instance finishes. This keeps the full 500-instance run from retaining hundreds of large eval images on disk. Docker image pulls and container starts use a 600 second timeout with up to three start attempts, because a transient Docker pull/run failure should not immediately count the instance as a benchmark failure.
 
 Split:
 

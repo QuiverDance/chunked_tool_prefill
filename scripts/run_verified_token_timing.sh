@@ -41,6 +41,9 @@ run_half() {
     --config "$BASE_CONFIG" \
     --config "$TOKEN_TIMING_CONFIG" \
     --config "model.model_kwargs.api_base=http://127.0.0.1:${port}/v1" \
+    --config "environment.pull_timeout=600" \
+    --config "environment.start_attempts=3" \
+    --config "environment.start_retry_sleep=10" \
     --config "run.remove_docker_image_after_instance=true" \
     > "$log_file" 2>&1
 }
