@@ -32,6 +32,7 @@ start_server() {
     --host "$HOST" \
     --port "$port" \
     --served-model-name "$SERVED_MODEL_NAME" \
+    --enable-prefix-caching \
     --reasoning-parser qwen3 \
     --enable-auto-tool-choice \
     --tool-call-parser qwen3_coder \
