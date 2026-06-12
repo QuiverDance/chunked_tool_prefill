@@ -62,16 +62,59 @@ class LitellmModel:
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
+        request_kwargs = self.config.model_kwargs | kwargs
+        if request_kwargs.get("stream"):
+            return self._query_streaming(messages, **request_kwargs)
         try:
             return litellm.completion(
                 model=self.config.model_name,
                 messages=messages,
                 tools=[BASH_TOOL],
-                **(self.config.model_kwargs | kwargs),
+                **request_kwargs,
             )
         except litellm.exceptions.AuthenticationError as e:
             e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
             raise e
+
+    def _query_streaming(self, messages: list[dict[str, str]], **request_kwargs):
+        request_kwargs = dict(request_kwargs)
+        request_kwargs["stream"] = True
+        request_kwargs.setdefault("stream_options", {"include_usage": True})
+
+        start = time.perf_counter()
+        first_chunk = None
+        first_token = None
+        chunk_count = 0
+        builder = StreamingResponseBuilder()
+
+        stream = litellm.completion(
+            model=self.config.model_name,
+            messages=messages,
+            tools=[BASH_TOOL],
+            **request_kwargs,
+        )
+        for chunk in stream:
+            now = time.perf_counter()
+            chunk_count += 1
+            if first_chunk is None:
+                first_chunk = now
+            data = chunk.model_dump(mode="json") if hasattr(chunk, "model_dump") else chunk
+            builder.add_chunk(data)
+            if first_token is None and chunk_has_generated_payload(data):
+                first_token = now
+
+        end = time.perf_counter()
+        response = builder.response()
+        response._mswea_model_timing = {
+            "stream": True,
+            "request_start_s": start,
+            "first_chunk_s": (first_chunk - start) if first_chunk is not None else None,
+            "ttft_s": (first_token - start) if first_token is not None else None,
+            "model_total_s": end - start,
+            "decode_s": (end - first_token) if first_token is not None else None,
+            "stream_chunk_count": chunk_count,
+        }
+        return response
 
     def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
         prepared = [{k: v for k, v in msg.items() if k != "extra"} for msg in messages]
@@ -102,6 +145,8 @@ class LitellmModel:
             **cost_output,
             "timestamp": time.time(),
         }
+        if model_timing := getattr(response, "_mswea_model_timing", None):
+            message["extra"]["model_timing"] = model_timing
         return message
 
     def _calculate_cost(self, response) -> dict[str, float]:
@@ -157,3 +202,103 @@ class LitellmModel:
                 },
             }
         }
+
+
+class StreamingResponseBuilder:
+    """Build a LiteLLM ModelResponse from OpenAI-compatible streaming chunks."""
+
+    def __init__(self):
+        self.response_id = None
+        self.created = None
+        self.model = None
+        self.system_fingerprint = None
+        self.role = "assistant"
+        self.content_parts: list[str] = []
+        self.reasoning_parts: list[str] = []
+        self.tool_calls: dict[int, dict[str, Any]] = {}
+        self.finish_reason = None
+        self.usage = None
+
+    def add_chunk(self, chunk: dict[str, Any]) -> None:
+        self.response_id = chunk.get("id") or self.response_id
+        self.created = chunk.get("created") or self.created
+        self.model = chunk.get("model") or self.model
+        self.system_fingerprint = chunk.get("system_fingerprint") or self.system_fingerprint
+        if chunk.get("usage"):
+            self.usage = chunk["usage"]
+
+        choices = chunk.get("choices") or []
+        if not choices:
+            return
+        choice = choices[0]
+        self.finish_reason = choice.get("finish_reason") or self.finish_reason
+        delta = choice.get("delta") or {}
+        if delta.get("role"):
+            self.role = delta["role"]
+        if delta.get("content") is not None:
+            self.content_parts.append(delta.get("content") or "")
+        if delta.get("reasoning_content"):
+            self.reasoning_parts.append(delta["reasoning_content"])
+        for tool_call in delta.get("tool_calls") or []:
+            self.add_tool_call(tool_call)
+
+    def add_tool_call(self, tool_call: dict[str, Any]) -> None:
+        index = int(tool_call.get("index") or 0)
+        state = self.tool_calls.setdefault(
+            index,
+            {"id": None, "type": "function", "function": {"name": None, "arguments": ""}},
+        )
+        state["id"] = tool_call.get("id") or state["id"]
+        state["type"] = tool_call.get("type") or state["type"]
+        function = tool_call.get("function") or {}
+        state["function"]["name"] = function.get("name") or state["function"]["name"]
+        if function.get("arguments") is not None:
+            state["function"]["arguments"] += function.get("arguments") or ""
+
+    def response(self):
+        from litellm.types.utils import ModelResponse
+
+        message = {
+            "role": self.role,
+            "content": "".join(self.content_parts) if self.content_parts else None,
+        }
+        if self.tool_calls:
+            message["tool_calls"] = [
+                {
+                    "id": tool_call["id"] or f"call_{index}",
+                    "type": tool_call["type"] or "function",
+                    "function": {
+                        "name": tool_call["function"]["name"] or "",
+                        "arguments": tool_call["function"]["arguments"],
+                    },
+                }
+                for index, tool_call in sorted(self.tool_calls.items())
+            ]
+        if self.reasoning_parts:
+            message["reasoning_content"] = "".join(self.reasoning_parts)
+
+        return ModelResponse(
+            id=self.response_id,
+            created=self.created,
+            model=self.model,
+            object="chat.completion",
+            system_fingerprint=self.system_fingerprint,
+            choices=[{"index": 0, "finish_reason": self.finish_reason, "message": message}],
+            usage=self.usage,
+        )
+
+
+def chunk_has_generated_payload(chunk: dict[str, Any]) -> bool:
+    choices = chunk.get("choices") or []
+    if not choices:
+        return False
+    delta = choices[0].get("delta") or {}
+    if delta.get("content") or delta.get("reasoning_content"):
+        return True
+    if delta.get("function_call"):
+        return True
+    for tool_call in delta.get("tool_calls") or []:
+        function = tool_call.get("function") or {}
+        if tool_call.get("id") or function.get("name") or function.get("arguments"):
+            return True
+    return False

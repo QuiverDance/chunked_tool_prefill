@@ -25,6 +25,13 @@ MODEL_FIELDS = [
     "finish_reason",
     "status",
     "incomplete_details",
+    "stream",
+    "request_start_s",
+    "first_chunk_s",
+    "ttft_s",
+    "model_total_s",
+    "decode_s",
+    "stream_chunk_count",
 ]
 
 TOOL_FIELDS = [
@@ -49,7 +56,41 @@ TOOL_FIELDS = [
     "exception_info",
 ]
 
-MODEL_SUMMARY_FIELDS = ["prompt_tokens", "completion_tokens", "total_tokens"]
+PROBLEM_FIELDS = [
+    "instance_id",
+    "trajectory",
+    "problem_e2e_s",
+    "model_calls",
+    "tool_calls",
+    "sum_ttft_s",
+    "sum_model_total_s",
+    "sum_tool_duration_s",
+    "ttft_share_of_e2e",
+    "model_total_share_of_e2e",
+    "tool_duration_share_of_e2e",
+]
+
+MODEL_SUMMARY_FIELDS = [
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "first_chunk_s",
+    "ttft_s",
+    "model_total_s",
+    "decode_s",
+    "stream_chunk_count",
+]
+PROBLEM_SUMMARY_FIELDS = [
+    "problem_e2e_s",
+    "model_calls",
+    "tool_calls",
+    "sum_ttft_s",
+    "sum_model_total_s",
+    "sum_tool_duration_s",
+    "ttft_share_of_e2e",
+    "model_total_share_of_e2e",
+    "tool_duration_share_of_e2e",
+]
 TOOL_SUMMARY_FIELDS = [
     "start_ts",
     "first_stdout_ts",
@@ -91,11 +132,12 @@ def main() -> None:
     output_dir = (args.output_dir or run_dir / "reports").resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_calls, tool_calls = collect_records(run_dir)
+    model_calls, tool_calls, problem_rows = collect_records(run_dir)
     write_csv(output_dir / "model_calls.csv", model_calls, MODEL_FIELDS)
     write_csv(output_dir / "tool_calls.csv", tool_calls, TOOL_FIELDS)
+    write_csv(output_dir / "problem_timings.csv", problem_rows, PROBLEM_FIELDS)
 
-    summary = build_summary(run_dir, model_calls, tool_calls)
+    summary = build_summary(run_dir, model_calls, tool_calls, problem_rows)
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
 
@@ -107,22 +149,56 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_records(run_dir: Path) -> tuple[list[Record], list[Record]]:
+def collect_records(run_dir: Path) -> tuple[list[Record], list[Record], list[Record]]:
     model_calls: list[Record] = []
     tool_calls: list[Record] = []
+    problem_rows: list[Record] = []
 
     for trajectory in sorted(run_dir.glob("**/*.traj.json")):
         data = load_json(trajectory)
         instance_id = data.get("instance_id") or trajectory.parent.name
+        trajectory_model_calls: list[Record] = []
+        trajectory_tool_calls: list[Record] = []
 
         for message_index, message in enumerate(data.get("messages", [])):
             if not isinstance(message, dict):
                 continue
             if model_call := model_row_from_message(message, instance_id, trajectory, message_index):
                 model_calls.append(model_call)
-            tool_calls.extend(tool_rows_from_message(message, instance_id, trajectory, message_index))
+                trajectory_model_calls.append(model_call)
+            rows = tool_rows_from_message(message, instance_id, trajectory, message_index)
+            tool_calls.extend(rows)
+            trajectory_tool_calls.extend(rows)
+        problem_rows.append(problem_row_from_trajectory(data, instance_id, trajectory, trajectory_model_calls, trajectory_tool_calls))
 
-    return model_calls, tool_calls
+    return model_calls, tool_calls, problem_rows
+
+
+def problem_row_from_trajectory(
+    data: Record,
+    instance_id: str,
+    trajectory: Path,
+    model_calls: list[Record],
+    tool_calls: list[Record],
+) -> Record:
+    timing = data.get("info", {}).get("token_timing", {}).get("problem", {})
+    problem_e2e_s = number_from(timing, "e2e_s")
+    sum_ttft_s = sum(number_from(record, "ttft_s") or 0.0 for record in model_calls)
+    sum_model_total_s = sum(number_from(record, "model_total_s") or 0.0 for record in model_calls)
+    sum_tool_duration_s = sum(number_from(record, "duration_s") or 0.0 for record in tool_calls)
+    return {
+        "instance_id": instance_id,
+        "trajectory": str(trajectory),
+        "problem_e2e_s": problem_e2e_s,
+        "model_calls": len(model_calls),
+        "tool_calls": len(tool_calls),
+        "sum_ttft_s": sum_ttft_s,
+        "sum_model_total_s": sum_model_total_s,
+        "sum_tool_duration_s": sum_tool_duration_s,
+        "ttft_share_of_e2e": safe_ratio(sum_ttft_s, problem_e2e_s),
+        "model_total_share_of_e2e": safe_ratio(sum_model_total_s, problem_e2e_s),
+        "tool_duration_share_of_e2e": safe_ratio(sum_tool_duration_s, problem_e2e_s),
+    }
 
 
 def model_row_from_message(message: Record, instance_id: str, trajectory: Path, message_index: int) -> Record:
@@ -190,13 +266,21 @@ def write_csv(path: Path, rows: list[Record], fields: list[str]) -> None:
         writer.writerows(rows)
 
 
-def build_summary(run_dir: Path, model_calls: list[Record], tool_calls: list[Record]) -> Record:
+def build_summary(run_dir: Path, model_calls: list[Record], tool_calls: list[Record], problem_rows: list[Record]) -> Record:
     return {
         "run_dir": str(run_dir),
-        "trajectory_count": len({record["trajectory"] for record in model_calls + tool_calls}),
+        "trajectory_count": len({record["trajectory"] for record in model_calls + tool_calls + problem_rows}),
+        "problems": problem_summary(problem_rows),
         "model_calls": model_summary(model_calls),
         "tool_calls": tool_summary(tool_calls),
         "commands": command_summaries(tool_calls),
+    }
+
+
+def problem_summary(records: list[Record]) -> Record:
+    return {
+        "count": len(records),
+        **numeric_summaries(records, PROBLEM_SUMMARY_FIELDS),
     }
 
 
@@ -263,6 +347,12 @@ def number_from(record: Record, field: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def safe_ratio(numerator: float, denominator: float | None) -> float | None:
+    if denominator in (None, 0):
+        return None
+    return numerator / denominator
 
 
 def numeric_summary(values: list[float]) -> Record:

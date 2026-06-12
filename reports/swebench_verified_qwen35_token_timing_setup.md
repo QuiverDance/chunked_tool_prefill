@@ -183,11 +183,23 @@ What it records in each trajectory:
 - `extra.token_timing.model_call.prompt_tokens`
 - `extra.token_timing.model_call.completion_tokens`
 - `extra.token_timing.model_call.total_tokens`
+- `extra.token_timing.model_call.ttft_s`
+- `extra.token_timing.model_call.model_total_s`
+- `extra.token_timing.model_call.decode_s`
 - `extra.token_timing.tool_call.duration_seconds`
 - `extra.token_timing.tool_call.output_tokens`
 - `extra.token_timing.tool_call.output_chars`
 - `extra.token_timing.tool_call.command_category`
 - `extra.token_timing.tool_call.command_categories`
+- `info.token_timing.problem.e2e_s`
+
+Model calls are streamed in token-timing runs so each step can record time to first token. The per-problem report file `problem_timings.csv` summarizes:
+
+- `problem_e2e_s`
+- `sum_ttft_s`
+- `sum_model_total_s`
+- `sum_tool_duration_s`
+- `ttft_share_of_e2e`
 
 Tool output token counting uses:
 

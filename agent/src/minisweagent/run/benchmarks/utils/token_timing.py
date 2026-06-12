@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import shlex
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,29 @@ class TokenTimingProgressAgent(ProgressTrackingAgent):
         )
         self.model_metrics: list[dict[str, Any]] = []
         self.tool_metrics: list[dict[str, Any]] = []
+        self.problem_timing: dict[str, Any] = {}
+
+    def run(self, *args, **kwargs) -> dict:
+        start_wall = time.time()
+        start_perf = time.perf_counter()
+        self.problem_timing = {
+            "start_wall_s": start_wall,
+            "end_wall_s": None,
+            "e2e_s": None,
+        }
+        try:
+            return super().run(*args, **kwargs)
+        finally:
+            end_wall = time.time()
+            self.problem_timing = {
+                "start_wall_s": start_wall,
+                "end_wall_s": end_wall,
+                "e2e_s": time.perf_counter() - start_perf,
+            }
+            self.save(self.config.output_path)
+
+    def serialize(self, *extra_dicts) -> dict:
+        return super().serialize({"info": {"token_timing": {"problem": self.problem_timing}}}, *extra_dicts)
 
     def add_messages(self, *messages: dict) -> list[dict]:
         for message in messages:
@@ -79,13 +103,15 @@ class TokenTimingProgressAgent(ProgressTrackingAgent):
         return self.add_messages(*observation_messages)
 
     def annotate_model_usage(self, message: dict) -> None:
-        response = message.get("extra", {}).get("response")
+        extra = message.get("extra", {})
+        response = extra.get("response")
         if not isinstance(response, dict) or "usage" not in response:
             return
         metric = {
             "instance_id": self.instance_id,
             "model_call_index": self.n_calls,
             **usage_from_response(response),
+            **model_timing_from_extra(extra),
         }
         message.setdefault("extra", {}).setdefault("token_timing", {})["model_call"] = metric
         self.model_metrics.append(metric)
@@ -185,6 +211,21 @@ def usage_from_response(response: dict) -> dict[str, Any]:
         "finish_reason": first_choice.get("finish_reason"),
         "status": response.get("status"),
         "incomplete_details": response.get("incomplete_details"),
+    }
+
+
+def model_timing_from_extra(extra: dict[str, Any]) -> dict[str, Any]:
+    timing = extra.get("model_timing")
+    if not isinstance(timing, dict):
+        return {}
+    return {
+        "stream": timing.get("stream"),
+        "request_start_s": timing.get("request_start_s"),
+        "first_chunk_s": timing.get("first_chunk_s"),
+        "ttft_s": timing.get("ttft_s"),
+        "model_total_s": timing.get("model_total_s"),
+        "decode_s": timing.get("decode_s"),
+        "stream_chunk_count": timing.get("stream_chunk_count"),
     }
 
 
