@@ -2,3 +2,9 @@ agent:
   agent_class: "minisweagent.run.benchmarks.utils.token_timing.TokenTimingProgressAgent"
   tokenizer_path: "/home/pjw7200/models/Qwen3.5-27B"
   tokenizer_local_files_only: true
+
+model:
+  model_kwargs:
+    stream: true
+    stream_options:
+      include_usage: true
