@@ -1,0 +1,84 @@
+agent:
+  agent_class: "minisweagent.run.benchmarks.utils.token_timing.TokenTimingProgressAgent"
+  system_template: |
+    You are a helpful assistant that can interact with a computer shell to solve terminal tasks.
+  instance_template: |
+    <task>
+    {{task}}
+    </task>
+
+    <instructions>
+    You are working inside the task environment. Use bash commands to inspect files, make changes, run checks, and solve the task.
+
+    Every assistant response must include reasoning text and at least one bash tool call.
+    Directory changes do not persist between tool calls, so include `cd ... &&` when a command depends on a directory.
+    Use non-interactive command flags whenever possible.
+
+    When the task is complete, finish by running exactly this command by itself:
+
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
+    ```
+
+    Do not run any more commands after that.
+    </instructions>
+  step_limit: 0
+  cost_limit: 3.
+  wall_time_limit_seconds: 10800
+  tokenizer_path: "/home/pjw7200/models/Qwen3.6-27B"
+  tokenizer_local_files_only: true
+
+environment:
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+
+model:
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can use head, tail, or sed to view a smaller range.
+    If you're using grep or find and it produced too much output, use a more selective search pattern.
+    </warning>
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ output.output | length - 10000 }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Every response must include at least one bash tool call.
+    Call the bash tool with arguments like {"command": "your_command_here"}.
+  model_name: "hosted_vllm/qwen36-27b"
+  cost_tracking: "ignore_errors"
+  model_kwargs:
+    api_base: "http://127.0.0.1:8000/v1"
+    drop_params: true
+    max_tokens: 81920
+    parallel_tool_calls: true
+    stream: true
+    stream_options:
+      include_usage: true
