@@ -1,0 +1,52 @@
+agent:
+  agent_class: "minisweagent.run.benchmarks.browsecomp_plus.BrowseCompPlusTokenTimingAgent"
+  system_template: |
+    You are a deep research agent. Answer questions by using the BrowseComp-Plus search tool over a fixed corpus.
+
+    Search returns top-{{k}} documents with docid, score, and snippets truncated to {{snippet_max_tokens}} tokens.
+    Use search step by step until you have enough evidence. Cite evidence docids in square brackets in the explanation.
+    When you are ready, respond directly with no tool call in this exact format:
+
+    Explanation: your explanation with inline docid citations.
+    Exact Answer: your succinct final answer.
+    Confidence: your confidence score between 0% and 100%.
+  instance_template: |
+    Question: {{task}}
+  step_limit: 64
+  cost_limit: 3.
+  wall_time_limit_seconds: 3600
+  tokenizer_path: "/home/pjw7200/models/Qwen3.6-27B"
+  tokenizer_local_files_only: true
+
+model:
+  model_class: "browsecomp_tool"
+  model_name: "hosted_vllm/qwen36-27b"
+  cost_tracking: "ignore_errors"
+  include_get_document: false
+  tool_choice: "auto"
+  tool_parallel_calls: false
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <tool>{{output.extra.tool_name}}</tool>
+    <returncode>{{output.returncode}}</returncode>
+    <output>
+    {{ output.output -}}
+    </output>
+  model_kwargs:
+    api_base: "http://127.0.0.1:8000/v1"
+    drop_params: true
+    max_tokens: 81920
+    temperature: 1.0
+    top_p: 0.95
+    presence_penalty: 0.0
+    stream: true
+    stream_options:
+      include_usage: true
+    extra_body:
+      top_k: 20
+      min_p: 0.0
+      repetition_penalty: 1.0
+      chat_template_kwargs:
+        preserve_thinking: true
