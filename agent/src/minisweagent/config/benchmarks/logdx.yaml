@@ -1,0 +1,123 @@
+agent:
+  agent_class: "minisweagent.run.benchmarks.utils.token_timing.TokenTimingProgressAgent"
+  tokenizer_path: ""
+  tokenizer_local_files_only: true
+  system_template: |
+    You are a careful CI log diagnostician. You inspect command output and files to identify the root cause of a failed CI job.
+  instance_template: |
+    <ci_failure>
+    {{task}}
+    </ci_failure>
+
+    <instructions>
+    # Task Instructions
+
+    You are working in an isolated LogDx-CI case workspace. Your job is to diagnose the root cause of the failed CI job from the available log and safe metadata.
+
+    ## Boundaries
+
+    - Work only in the current directory.
+    - Use `raw.log` as the source of CI evidence.
+    - Do not claim facts that are not supported by the log.
+    - Do not modify files except for creating `diagnosis.json`.
+
+    ## Workflow
+
+    1. Inspect `safe_case_metadata.json`.
+    2. Search and inspect `raw.log` for the first meaningful failure and supporting evidence.
+    3. Distinguish the root cause from downstream repeated symptoms.
+    4. Create `diagnosis.json` with this exact JSON object shape:
+
+    ```json
+    {
+      "summary": "one or two sentences",
+      "root_cause_category": "category string",
+      "root_cause": "specific root cause",
+      "confidence": 0.0,
+      "relevant_files": [],
+      "relevant_tests": [],
+      "evidence": [
+        {
+          "quote": "short exact quote from the log",
+          "reason": "why this quote matters"
+        }
+      ],
+      "suggested_fix": "concrete fix direction"
+    }
+    ```
+
+    ## Command Execution Rules
+
+    Each assistant response must include reasoning text and at least one bash tool call.
+    Commands run in separate subshells, so include any needed `cd`, environment variables, or setup in each command.
+    Use non-interactive commands. Do not use interactive editors.
+
+    ## Submission
+
+    When finished, create and inspect `diagnosis.json` in separate commands. Then submit with this exact command:
+
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat diagnosis.json
+    ```
+
+    The submitted output must be only the JSON object after the marker.
+    </instructions>
+  step_limit: 80
+  cost_limit: 3.
+
+environment:
+  cwd: ""
+  timeout: 120
+  interpreter: ["bash", "-c"]
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+  environment_class: local
+
+model:
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a command that produces less output, or inspect a narrower file/range.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Every response needs at least one bash tool call.
+  model_name: "hosted_vllm/qwen36-27b"
+  cost_tracking: "ignore_errors"
+  model_kwargs:
+    api_base: "http://127.0.0.1:8000/v1"
+    drop_params: true
+    max_tokens: 32768
+    parallel_tool_calls: true
+    stream: true
+    stream_options:
+      include_usage: true

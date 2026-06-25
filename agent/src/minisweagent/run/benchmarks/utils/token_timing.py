@@ -17,6 +17,7 @@ from minisweagent.agents.default import AgentConfig
 from minisweagent.run.benchmarks.utils.common import ProgressTrackingAgent
 
 SETUP_COMMANDS = ["cd", "export", "source", ".", "alias", "unalias", "set", "unset"]
+SUBMISSION_MARKER = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 COMPOUND_KEYWORDS = {
     "case",
     "do",
@@ -100,6 +101,7 @@ class TokenTimingProgressAgent(ProgressTrackingAgent):
         actions = message.get("extra", {}).get("actions", [])
         outputs = [self.execute_timed_action(action) for action in actions]
         observation_messages = self.model.format_observation_messages(message, outputs, self.get_template_vars())
+        self.attach_rendered_observation_metrics(outputs, observation_messages)
         return self.add_messages(*observation_messages)
 
     def annotate_model_usage(self, message: dict) -> None:
@@ -118,6 +120,9 @@ class TokenTimingProgressAgent(ProgressTrackingAgent):
 
     def execute_timed_action(self, action: dict) -> dict:
         command = action.get("command", "")
+        if SUBMISSION_MARKER in command:
+            return self.env.execute(action)
+
         segments = split_sequential_commands(command)
         marker = f"__MSWEA_TOKEN_TIMING_{uuid.uuid4().hex}__"
 
@@ -149,6 +154,19 @@ class TokenTimingProgressAgent(ProgressTrackingAgent):
             self.tool_metrics.append(metric)
         output.setdefault("extra", {})["token_timing"] = {"tool_calls": metrics}
 
+    def attach_rendered_observation_metrics(self, outputs: list[dict], observation_messages: list[dict]) -> None:
+        for output, message in zip(outputs, observation_messages):
+            tool_calls = output.get("extra", {}).get("token_timing", {}).get("tool_calls", [])
+            if not tool_calls:
+                continue
+
+            rendered = rendered_observation_text(message)
+            summary = rendered_observation_summary(self.tokenizer, output, rendered)
+            for index, metric in enumerate(tool_calls):
+                metric["rendered_observation_owner"] = index == 0
+                if index == 0:
+                    metric.update(summary)
+
     def tool_metric(
         self,
         action: dict,
@@ -167,13 +185,26 @@ class TokenTimingProgressAgent(ProgressTrackingAgent):
             "start_ts": record["start_ts"],
             "first_stdout_ts": record["first_stdout_ts"],
             "last_stdout_ts": record["last_stdout_ts"],
+            "first_stderr_ts": record["first_stderr_ts"],
+            "last_stderr_ts": record["last_stderr_ts"],
+            "first_output_ts": record["first_output_ts"],
+            "last_output_ts": record["last_output_ts"],
             "end_ts": record["end_ts"],
             "duration_s": record["duration_s"],
             "time_to_first_stdout_s": record["time_to_first_stdout_s"],
+            "time_to_first_stderr_s": record["time_to_first_stderr_s"],
+            "time_to_first_output_s": record["time_to_first_output_s"],
             "returncode": record["returncode"],
             "output_tokens": count_tokens(self.tokenizer, record["output"]),
             "stdout_tokens": count_tokens(self.tokenizer, record["stdout"]),
             "stderr_tokens": count_tokens(self.tokenizer, record["stderr"]),
+            "raw_output_tokens": count_tokens(self.tokenizer, record["output"]),
+            "raw_stdout_tokens": count_tokens(self.tokenizer, record["stdout"]),
+            "raw_stderr_tokens": count_tokens(self.tokenizer, record["stderr"]),
+            "raw_chars": len(record["output"]),
+            "raw_stdout_chars": len(record["stdout"]),
+            "raw_stderr_chars": len(record["stderr"]),
+            **stream_timing_summary(self.tokenizer, record),
             "exception_info": exception_info,
         }
 
@@ -198,6 +229,107 @@ def count_tokens(tokenizer, text: str) -> int | None:
     if tokenizer is None:
         return None
     return len(tokenizer.encode(text or "", add_special_tokens=False))
+
+
+def rendered_observation_text(message: dict) -> str:
+    if "content" in message:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(text_part(item) for item in content if text_part(item))
+    if "output" in message:
+        return str(message.get("output") or "")
+    return ""
+
+
+def text_part(item: Any) -> str:
+    if isinstance(item, str):
+        return item
+    if not isinstance(item, dict):
+        return ""
+    value = item.get("text") or item.get("content")
+    return value if isinstance(value, str) else ""
+
+
+def rendered_observation_summary(tokenizer, output: dict, rendered: str) -> dict[str, Any]:
+    raw_output = output.get("output", "") or ""
+    elided_chars = rendered_elided_chars(rendered)
+    return {
+        "rendered_observation_tokens": count_tokens(tokenizer, rendered),
+        "rendered_chars": len(rendered),
+        "was_truncated": elided_chars is not None,
+        "elided_chars": elided_chars,
+        "raw_output_chars": len(raw_output),
+    }
+
+
+def rendered_elided_chars(rendered: str) -> int | None:
+    match = re.search(r"<elided_chars>\s*(\d+)\s*(?:</elided_chars>)?", rendered)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\b(\d+)\s+characters\s+elided\b", rendered)
+    return int(match.group(1)) if match else None
+
+
+def stream_timing_summary(tokenizer, record: dict[str, Any]) -> dict[str, Any]:
+    events = stream_events(record)
+    duration = record.get("duration_s")
+    raw_output_tokens = count_tokens(tokenizer, record.get("output", ""))
+    summary: dict[str, Any] = {
+        "stream_event_count": len(events),
+        "stream_stdout_event_count": len(record.get("stdout_events", [])),
+        "stream_stderr_event_count": len(record.get("stderr_events", [])),
+        "stream_token_curve": stream_token_curve(tokenizer, events),
+    }
+    for seconds in (1, 5, 10, 30):
+        tokens = tokens_before_end(tokenizer, events, duration, seconds)
+        summary[f"stream_tokens_before_end_{seconds}s"] = tokens
+        summary[f"stream_token_fraction_before_end_{seconds}s"] = safe_token_ratio(tokens, raw_output_tokens)
+    half_tokens = tokens_before_time(tokenizer, events, duration / 2) if duration is not None else None
+    summary["stream_tokens_before_half_duration"] = half_tokens
+    summary["stream_token_fraction_before_half_duration"] = safe_token_ratio(half_tokens, raw_output_tokens)
+    return summary
+
+
+def stream_events(record: dict[str, Any]) -> list[tuple[float, str]]:
+    events: list[tuple[float, str]] = []
+    for stream in ("stdout", "stderr"):
+        timestamps = record.get(f"{stream}_events", [])
+        lines = (record.get(stream, "") or "").splitlines(keepends=True)
+        for timestamp, line in zip(timestamps, lines):
+            if timestamp is not None:
+                events.append((timestamp, line))
+    return sorted(events, key=lambda item: item[0])
+
+
+def stream_token_curve(tokenizer, events: list[tuple[float, str]]) -> list[dict[str, Any]]:
+    if tokenizer is None:
+        return []
+    total = 0
+    curve = []
+    for timestamp, text in events:
+        total += count_tokens(tokenizer, text) or 0
+        curve.append({"t": timestamp, "tokens": total})
+    return curve
+
+
+def tokens_before_end(tokenizer, events: list[tuple[float, str]], duration: float | None, seconds_before_end: int) -> int | None:
+    if duration is None:
+        return None
+    return tokens_before_time(tokenizer, events, max(0.0, duration - seconds_before_end))
+
+
+def tokens_before_time(tokenizer, events: list[tuple[float, str]], cutoff: float) -> int | None:
+    if tokenizer is None:
+        return None
+    return sum(count_tokens(tokenizer, text) or 0 for timestamp, text in events if timestamp <= cutoff)
+
+
+def safe_token_ratio(numerator: int | None, denominator: int | None) -> float | None:
+    if numerator is None or not denominator:
+        return None
+    return numerator / denominator
 
 
 def usage_from_response(response: dict) -> dict[str, Any]:
@@ -367,11 +499,13 @@ __mswea_capture() {
   local stream_file="$1"
   local combined_file="$2"
   local meta_file="$3"
+  local event_file="$4"
   local line now
   while IFS= read -r line || [[ -n "$line" ]]; do
     now="$(date +%s%N)"
     [[ -s "$meta_file" ]] || printf '%s\n' "$now" >"$meta_file"
     printf '%s\n' "$now" >"$meta_file.last"
+    printf '%s\n' "$now" >>"$event_file"
     printf '%s\n' "$line" >>"$stream_file"
     printf '%s\n' "$line" >>"$combined_file"
   done
@@ -380,21 +514,23 @@ __mswea_capture() {
 __mswea_run_segment() {
   local index="$1"
   local command="$2"
-  local stdout_file stderr_file combined_file stdout_meta stderr_meta stdout_fifo stderr_fifo
+  local stdout_file stderr_file combined_file stdout_meta stderr_meta stdout_events stderr_events stdout_fifo stderr_fifo
   stdout_file="$(mktemp)"
   stderr_file="$(mktemp)"
   combined_file="$(mktemp)"
   stdout_meta="$(mktemp)"
   stderr_meta="$(mktemp)"
+  stdout_events="$(mktemp)"
+  stderr_events="$(mktemp)"
   stdout_fifo="$(mktemp -u)"
   stderr_fifo="$(mktemp -u)"
   mkfifo "$stdout_fifo" "$stderr_fifo"
 
   local start_ns end_ns rc stdout_pid stderr_pid
   start_ns="$(date +%s%N)"
-  __mswea_capture "$stdout_file" "$combined_file" "$stdout_meta" <"$stdout_fifo" &
+  __mswea_capture "$stdout_file" "$combined_file" "$stdout_meta" "$stdout_events" <"$stdout_fifo" &
   stdout_pid=$!
-  __mswea_capture "$stderr_file" "$combined_file" "$stderr_meta" <"$stderr_fifo" &
+  __mswea_capture "$stderr_file" "$combined_file" "$stderr_meta" "$stderr_events" <"$stderr_fifo" &
   stderr_pid=$!
   eval "$command" >"$stdout_fifo" 2>"$stderr_fifo"
   rc=$?
@@ -413,14 +549,21 @@ __mswea_run_segment() {
   fi
 
   cat "$combined_file"
-  printf '%s\t%s\tMETA\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\tMETA\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$__mswea_marker" "$index" "$start_ns" \
-    "$(cat "$stdout_meta" 2>/dev/null)" "$(cat "$stdout_meta.last" 2>/dev/null)" "$end_ns" "$rc"
+    "$(cat "$stdout_meta" 2>/dev/null)" "$(cat "$stdout_meta.last" 2>/dev/null)" \
+    "$(cat "$stderr_meta" 2>/dev/null)" "$(cat "$stderr_meta.last" 2>/dev/null)" "$end_ns" "$rc"
   printf '%s\t%s\tSTDOUT\n' "$__mswea_marker" "$index"
   cat "$stdout_file"
   printf '%s\t%s\tEND\n' "$__mswea_marker" "$index"
   printf '%s\t%s\tSTDERR\n' "$__mswea_marker" "$index"
   cat "$stderr_file"
+  printf '%s\t%s\tEND\n' "$__mswea_marker" "$index"
+  printf '%s\t%s\tSTDOUT_EVENTS\n' "$__mswea_marker" "$index"
+  cat "$stdout_events"
+  printf '%s\t%s\tEND\n' "$__mswea_marker" "$index"
+  printf '%s\t%s\tSTDERR_EVENTS\n' "$__mswea_marker" "$index"
+  cat "$stderr_events"
   printf '%s\t%s\tEND\n' "$__mswea_marker" "$index"
   __mswea_cleanup
   return "$rc"
@@ -429,6 +572,7 @@ __mswea_run_segment() {
 __mswea_cleanup() {
   rm -f "$stdout_file" "$stderr_file" "$combined_file"
   rm -f "$stdout_meta" "$stdout_meta.last" "$stderr_meta" "$stderr_meta.last"
+  rm -f "$stdout_events" "$stderr_events"
   rm -f "$stdout_fifo" "$stderr_fifo"
 }
 """
@@ -488,15 +632,17 @@ def parse_instrumented_output(
         index = marker_index(fields)
         if not 0 <= index < len(segments):
             continue
-        if fields[2] == "META" and len(fields) == 8:
+        if fields[2] == "META" and len(fields) in {8, 10}:
             records.setdefault(index, empty_record()).update(meta_record(fields))
         elif fields[2] == "SKIPPED" and len(fields) == 4:
             records[index] = {**empty_record(), "skipped": True, "returncode": int(fields[3])}
-        elif fields[2] in {"STDOUT", "STDERR"}:
+        elif fields[2] in {"STDOUT", "STDERR", "STDOUT_EVENTS", "STDERR_EVENTS"}:
             open_stream = (index, fields[2].lower())
 
     for record in records.values():
         record["output"] = record["stdout"] + record["stderr"]
+        record["stdout_events"] = event_times(record["stdout_events"], record.get("start_ns"))
+        record["stderr_events"] = event_times(record["stderr_events"], record.get("start_ns"))
     return "".join(clean_output), records
 
 
@@ -518,13 +664,21 @@ def empty_record() -> dict[str, Any]:
         "start_ts": None,
         "first_stdout_ts": None,
         "last_stdout_ts": None,
+        "first_stderr_ts": None,
+        "last_stderr_ts": None,
+        "first_output_ts": None,
+        "last_output_ts": None,
         "end_ts": None,
         "duration_s": None,
         "time_to_first_stdout_s": None,
+        "time_to_first_stderr_s": None,
+        "time_to_first_output_s": None,
         "returncode": None,
         "stdout": "",
         "stderr": "",
         "output": "",
+        "stdout_events": "",
+        "stderr_events": "",
     }
 
 
@@ -532,15 +686,33 @@ def meta_record(fields: list[str]) -> dict[str, Any]:
     start_ns = int(fields[3])
     first_stdout_ts = relative_seconds(fields[4], start_ns)
     last_stdout_ts = relative_seconds(fields[5], start_ns)
-    end_ts = relative_seconds(fields[6], start_ns)
+    if len(fields) == 10:
+        first_stderr_ts = relative_seconds(fields[6], start_ns)
+        last_stderr_ts = relative_seconds(fields[7], start_ns)
+        end_ts = relative_seconds(fields[8], start_ns)
+        returncode = int(fields[9])
+    else:
+        first_stderr_ts = None
+        last_stderr_ts = None
+        end_ts = relative_seconds(fields[6], start_ns)
+        returncode = int(fields[7])
+    first_output_ts = min_time(first_stdout_ts, first_stderr_ts)
+    last_output_ts = max_time(last_stdout_ts, last_stderr_ts)
     return {
+        "start_ns": start_ns,
         "start_ts": 0.0,
         "first_stdout_ts": first_stdout_ts,
         "last_stdout_ts": last_stdout_ts,
+        "first_stderr_ts": first_stderr_ts,
+        "last_stderr_ts": last_stderr_ts,
+        "first_output_ts": first_output_ts,
+        "last_output_ts": last_output_ts,
         "end_ts": end_ts,
         "duration_s": end_ts,
         "time_to_first_stdout_s": first_stdout_ts,
-        "returncode": int(fields[7]),
+        "time_to_first_stderr_s": first_stderr_ts,
+        "time_to_first_output_s": first_output_ts,
+        "returncode": returncode,
     }
 
 
@@ -548,3 +720,25 @@ def relative_seconds(value: str, start_ns: int) -> float | None:
     if not value:
         return None
     return (int(value) - start_ns) / 1_000_000_000
+
+
+def event_times(raw_events: str, start_ns: int | None) -> list[float | None]:
+    if start_ns is None:
+        return []
+    times = []
+    for line in (raw_events or "").splitlines():
+        try:
+            times.append(relative_seconds(line, start_ns))
+        except ValueError:
+            times.append(None)
+    return times
+
+
+def min_time(*values: float | None) -> float | None:
+    present = [value for value in values if value is not None]
+    return min(present) if present else None
+
+
+def max_time(*values: float | None) -> float | None:
+    present = [value for value in values if value is not None]
+    return max(present) if present else None
