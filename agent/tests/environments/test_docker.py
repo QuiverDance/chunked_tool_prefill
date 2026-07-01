@@ -1,5 +1,6 @@
 import os
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -51,6 +52,21 @@ def test_docker_environment_config_defaults(executable):
     assert config.forward_env == []
     assert config.timeout == 30
     assert config.executable == executable
+    assert config.start_command is None
+
+
+def test_docker_environment_custom_start_command():
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(stdout="container-123\n")
+
+    with patch("minisweagent.environments.docker.subprocess.run", fake_run):
+        env = DockerEnvironment(image="example/image:tag", start_command=["-c", "sleep 2h"])
+
+    assert calls[0][-3:] == ["example/image:tag", "-c", "sleep 2h"]
+    env.container_id = None
 
 
 @pytest.mark.slow

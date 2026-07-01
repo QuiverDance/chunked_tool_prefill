@@ -1,0 +1,113 @@
+agent:
+  agent_class: "minisweagent.run.benchmarks.utils.token_timing.TokenTimingProgressAgent"
+  tokenizer_path: ""
+  tokenizer_local_files_only: true
+  system_template: |
+    You are a helpful assistant that can interact with a computer shell to solve long-horizon software engineering tasks.
+  instance_template: |
+    <pr_description>
+    {{task}}
+    </pr_description>
+
+    <instructions>
+    # Task Instructions
+
+    You are working inside a SWE-bench Pro repository checkout. Your job is to make source-code changes that satisfy the issue description and requirements.
+
+    ## Boundaries
+
+    - Work in the current directory.
+    - Prefer source-code changes that are general and consistent with the existing codebase.
+    - Do not commit changes.
+    - Avoid changing tests, generated files, dependency lockfiles, or build configuration unless the issue clearly requires it.
+
+    ## Workflow
+
+    1. Inspect the repository and identify the relevant implementation path.
+    2. Reproduce or narrow the issue when practical.
+    3. Make the smallest durable fix.
+    4. Run targeted checks when practical.
+    5. Submit only a unified diff patch for the files you changed.
+
+    ## Command Execution Rules
+
+    Each assistant response must include reasoning text and at least one bash tool call.
+    Commands run in separate subshells, so include any needed `cd`, environment variables, or setup in each command.
+    Use non-interactive flags for commands. Do not use interactive editors.
+
+    ## Submission
+
+    When finished, create and inspect `patch.txt` in separate commands:
+
+    ```bash
+    git diff -- path/to/file1 path/to/file2 > patch.txt
+    ```
+
+    Then submit with this exact command:
+
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
+    ```
+
+    The submitted output must be only the unified diff after the marker.
+    </instructions>
+  step_limit: 300
+  cost_limit: 3.
+
+environment:
+  cwd: "/app"
+  timeout: 180
+  start_command: ["-c", "sleep 2h"]
+  interpreter: ["bash", "-c"]
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+  environment_class: docker
+
+model:
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a command that produces less output, or inspect a narrower file/range.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Every response needs at least one bash tool call.
+  model_name: "hosted_vllm/qwen36-27b"
+  cost_tracking: "ignore_errors"
+  model_kwargs:
+    api_base: "http://127.0.0.1:8000/v1"
+    drop_params: true
+    max_tokens: 32768
+    parallel_tool_calls: true
+    stream: true
+    stream_options:
+      include_usage: true

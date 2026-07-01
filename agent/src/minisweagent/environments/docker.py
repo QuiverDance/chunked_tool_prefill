@@ -34,6 +34,8 @@ class DockerEnvironmentConfig(BaseModel):
     """
     container_timeout: str = "2h"
     """Max duration to keep container running. Uses the same format as the sleep command."""
+    start_command: list[str] | None = None
+    """Command to keep the container alive. Defaults to ["sleep", container_timeout]."""
     pull_timeout: int = 120
     """Timeout in seconds for pulling images."""
     start_attempts: int = 3
@@ -83,6 +85,7 @@ class DockerEnvironment:
 
         for attempt in range(1, attempts + 1):
             container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
+            start_command = self.config.start_command or ["sleep", self.config.container_timeout]
             cmd = [
                 self.config.executable,
                 "run",
@@ -93,8 +96,7 @@ class DockerEnvironment:
                 self.config.cwd,
                 *self.config.run_args,
                 self.config.image,
-                "sleep",
-                self.config.container_timeout,
+                *start_command,
             ]
             self.logger.debug(f"Starting container with command: {shlex.join(cmd)}")
             try:
