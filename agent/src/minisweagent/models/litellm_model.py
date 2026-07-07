@@ -84,7 +84,6 @@ class LitellmModel:
         start = time.perf_counter()
         first_chunk = None
         first_token = None
-        chunk_count = 0
         builder = StreamingResponseBuilder()
 
         stream = litellm.completion(
@@ -95,7 +94,6 @@ class LitellmModel:
         )
         for chunk in stream:
             now = time.perf_counter()
-            chunk_count += 1
             if first_chunk is None:
                 first_chunk = now
             data = chunk.model_dump(mode="json") if hasattr(chunk, "model_dump") else chunk
@@ -106,13 +104,11 @@ class LitellmModel:
         end = time.perf_counter()
         response = builder.response()
         response._mswea_model_timing = {
-            "stream": True,
             "request_start_s": start,
             "first_chunk_s": (first_chunk - start) if first_chunk is not None else None,
             "ttft_s": (first_token - start) if first_token is not None else None,
             "model_total_s": end - start,
             "decode_s": (end - first_token) if first_token is not None else None,
-            "stream_chunk_count": chunk_count,
         }
         return response
 
@@ -293,7 +289,7 @@ def chunk_has_generated_payload(chunk: dict[str, Any]) -> bool:
     if not choices:
         return False
     delta = choices[0].get("delta") or {}
-    if delta.get("content") or delta.get("reasoning_content"):
+    if delta.get("content") or delta.get("reasoning") or delta.get("reasoning_content"):
         return True
     if delta.get("function_call"):
         return True

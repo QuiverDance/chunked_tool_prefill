@@ -64,6 +64,7 @@ def test_streaming_response_builder_reconstructs_tool_call():
 
 def test_chunk_has_generated_payload_skips_empty_role_chunk():
     assert not chunk_has_generated_payload({"choices": [{"delta": {"role": "assistant", "content": ""}}]})
+    assert chunk_has_generated_payload({"choices": [{"delta": {"reasoning": "x"}}]})
     assert chunk_has_generated_payload({"choices": [{"delta": {"reasoning_content": "x"}}]})
     assert chunk_has_generated_payload(
         {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{"}}]}}]}

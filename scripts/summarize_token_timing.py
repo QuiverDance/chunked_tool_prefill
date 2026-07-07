@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 Record = dict[str, Any]
+STREAM_SAMPLE_INTERVAL_S = 0.05
+TOKENIZER_CACHE: dict[tuple[str, bool], Any] = {}
 
 MODEL_FIELDS = [
     "instance_id",
@@ -23,15 +25,9 @@ MODEL_FIELDS = [
     "completion_tokens",
     "total_tokens",
     "finish_reason",
-    "status",
-    "incomplete_details",
-    "stream",
-    "request_start_s",
-    "first_chunk_s",
     "ttft_s",
     "model_total_s",
     "decode_s",
-    "stream_chunk_count",
 ]
 
 TOOL_FIELDS = [
@@ -39,27 +35,24 @@ TOOL_FIELDS = [
     "trajectory",
     "message_index",
     "tool_call_id",
-    "sequence_index",
-    "sequence_separator",
     "command_category",
-    "command",
-    "start_ts",
-    "first_stdout_ts",
-    "last_stdout_ts",
-    "end_ts",
     "duration_s",
-    "time_to_first_stdout_s",
+    "time_to_first_output_s",
     "returncode",
-    "output_tokens",
-    "stdout_tokens",
-    "stderr_tokens",
-    "exception_info",
+    "raw_output_tokens",
+    "rendered_observation_tokens",
+    "was_truncated",
+    "raw_output_chars",
+    "stream_max_tokens_per_sample",
+    "stream_mean_tokens_per_sample",
 ]
 
 PROBLEM_FIELDS = [
     "instance_id",
     "trajectory",
     "problem_e2e_s",
+    "serving_relevant_e2e_s",
+    "agent_overhead_s",
     "model_calls",
     "tool_calls",
     "sum_ttft_s",
@@ -68,20 +61,21 @@ PROBLEM_FIELDS = [
     "ttft_share_of_e2e",
     "model_total_share_of_e2e",
     "tool_duration_share_of_e2e",
+    "ttft_share_of_serving_relevant_e2e",
 ]
 
 MODEL_SUMMARY_FIELDS = [
     "prompt_tokens",
     "completion_tokens",
     "total_tokens",
-    "first_chunk_s",
     "ttft_s",
     "model_total_s",
     "decode_s",
-    "stream_chunk_count",
 ]
 PROBLEM_SUMMARY_FIELDS = [
     "problem_e2e_s",
+    "serving_relevant_e2e_s",
+    "agent_overhead_s",
     "model_calls",
     "tool_calls",
     "sum_ttft_s",
@@ -90,17 +84,17 @@ PROBLEM_SUMMARY_FIELDS = [
     "ttft_share_of_e2e",
     "model_total_share_of_e2e",
     "tool_duration_share_of_e2e",
+    "ttft_share_of_serving_relevant_e2e",
 ]
 TOOL_SUMMARY_FIELDS = [
-    "start_ts",
-    "first_stdout_ts",
-    "last_stdout_ts",
-    "end_ts",
     "duration_s",
-    "time_to_first_stdout_s",
-    "output_tokens",
-    "stdout_tokens",
-    "stderr_tokens",
+    "time_to_first_output_s",
+    "raw_output_tokens",
+    "rendered_observation_tokens",
+    "was_truncated",
+    "raw_output_chars",
+    "stream_max_tokens_per_sample",
+    "stream_mean_tokens_per_sample",
 ]
 PERCENTILES = [50, 90, 95, 99]
 
@@ -114,14 +108,9 @@ class FractionMetric:
 
 FRACTION_METRICS = [
     FractionMetric(
-        "stdout_tokens_ge_512_and_duration_ge_1s",
-        ("stdout_tokens", "duration_s"),
-        lambda stdout_tokens, duration_s: stdout_tokens >= 512 and duration_s >= 1,
-    ),
-    FractionMetric(
-        "first_stdout_before_half_duration",
-        ("time_to_first_stdout_s", "duration_s"),
-        lambda first_stdout_s, duration_s: first_stdout_s < 0.5 * duration_s,
+        "rendered_observation_was_truncated",
+        ("was_truncated",),
+        lambda was_truncated: bool(was_truncated),
     ),
 ]
 
@@ -132,7 +121,12 @@ def main() -> None:
     output_dir = (args.output_dir or run_dir / "reports").resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_calls, tool_calls, problem_rows = collect_records(run_dir)
+    model_calls, tool_calls, problem_rows = collect_records(
+        run_dir,
+        tokenizer_path=args.tokenizer_path,
+        tokenizer_local_files_only=args.tokenizer_local_files_only,
+        stream_sample_interval_s=args.stream_sample_interval_s,
+    )
     write_csv(output_dir / "model_calls.csv", model_calls, MODEL_FIELDS)
     write_csv(output_dir / "tool_calls.csv", tool_calls, TOOL_FIELDS)
     write_csv(output_dir / "problem_timings.csv", problem_rows, PROBLEM_FIELDS)
@@ -146,16 +140,43 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--tokenizer-path",
+        help="Tokenizer used for offline tool-output metrics. Defaults to each trajectory's agent tokenizer_path.",
+    )
+    parser.add_argument(
+        "--tokenizer-local-files-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Load tokenizer from local files only. Use --no-tokenizer-local-files-only to allow downloads.",
+    )
+    parser.add_argument(
+        "--stream-sample-interval-s",
+        type=float,
+        default=STREAM_SAMPLE_INTERVAL_S,
+        help="Offline stream token sample interval in seconds.",
+    )
     return parser.parse_args()
 
 
-def collect_records(run_dir: Path) -> tuple[list[Record], list[Record], list[Record]]:
+def collect_records(
+    run_dir: Path,
+    *,
+    tokenizer_path: str | None = None,
+    tokenizer_local_files_only: bool = True,
+    stream_sample_interval_s: float = STREAM_SAMPLE_INTERVAL_S,
+) -> tuple[list[Record], list[Record], list[Record]]:
     model_calls: list[Record] = []
     tool_calls: list[Record] = []
     problem_rows: list[Record] = []
 
     for trajectory in sorted(run_dir.glob("**/*.traj.json")):
         data = load_json(trajectory)
+        tokenizer = load_tokenizer(
+            tokenizer_path or tokenizer_path_from_trajectory(data),
+            local_files_only=tokenizer_local_files_only,
+            required=bool(tokenizer_path),
+        )
         instance_id = data.get("instance_id") or trajectory.parent.name
         trajectory_model_calls: list[Record] = []
         trajectory_tool_calls: list[Record] = []
@@ -166,7 +187,14 @@ def collect_records(run_dir: Path) -> tuple[list[Record], list[Record], list[Rec
             if model_call := model_row_from_message(message, instance_id, trajectory, message_index):
                 model_calls.append(model_call)
                 trajectory_model_calls.append(model_call)
-            rows = tool_rows_from_message(message, instance_id, trajectory, message_index)
+            rows = tool_rows_from_message(
+                message,
+                instance_id,
+                trajectory,
+                message_index,
+                tokenizer=tokenizer,
+                stream_sample_interval_s=stream_sample_interval_s,
+            )
             tool_calls.extend(rows)
             trajectory_tool_calls.extend(rows)
         problem_rows.append(problem_row_from_trajectory(data, instance_id, trajectory, trajectory_model_calls, trajectory_tool_calls))
@@ -186,10 +214,14 @@ def problem_row_from_trajectory(
     sum_ttft_s = sum(number_from(record, "ttft_s") or 0.0 for record in model_calls)
     sum_model_total_s = sum(number_from(record, "model_total_s") or 0.0 for record in model_calls)
     sum_tool_duration_s = sum(number_from(record, "duration_s") or 0.0 for record in tool_calls)
+    serving_relevant_e2e_s = sum_model_total_s + sum_tool_duration_s
+    agent_overhead_s = problem_e2e_s - serving_relevant_e2e_s if problem_e2e_s is not None else None
     return {
         "instance_id": instance_id,
         "trajectory": str(trajectory),
         "problem_e2e_s": problem_e2e_s,
+        "serving_relevant_e2e_s": serving_relevant_e2e_s,
+        "agent_overhead_s": agent_overhead_s,
         "model_calls": len(model_calls),
         "tool_calls": len(tool_calls),
         "sum_ttft_s": sum_ttft_s,
@@ -198,6 +230,7 @@ def problem_row_from_trajectory(
         "ttft_share_of_e2e": safe_ratio(sum_ttft_s, problem_e2e_s),
         "model_total_share_of_e2e": safe_ratio(sum_model_total_s, problem_e2e_s),
         "tool_duration_share_of_e2e": safe_ratio(sum_tool_duration_s, problem_e2e_s),
+        "ttft_share_of_serving_relevant_e2e": safe_ratio(sum_ttft_s, serving_relevant_e2e_s),
     }
 
 
@@ -208,11 +241,31 @@ def model_row_from_message(message: Record, instance_id: str, trajectory: Path, 
     return record_row(record, MODEL_FIELDS, instance_id, trajectory, message_index) if record else {}
 
 
-def tool_rows_from_message(message: Record, instance_id: str, trajectory: Path, message_index: int) -> list[Record]:
+def tool_rows_from_message(
+    message: Record,
+    instance_id: str,
+    trajectory: Path,
+    message_index: int,
+    *,
+    tokenizer,
+    stream_sample_interval_s: float,
+) -> list[Record]:
     timing = timing_from_extra(extra_from_message(message))
     return [
-        record_row(tool_call, TOOL_FIELDS, instance_id, trajectory, message_index)
-        for tool_call in timing.get("tool_calls", [])
+        record_row(
+            enriched_tool_call(
+                tool_call,
+                message,
+                tokenizer,
+                stream_sample_interval_s,
+                rendered_observation_owner=index == 0,
+            ),
+            TOOL_FIELDS,
+            instance_id,
+            trajectory,
+            message_index,
+        )
+        for index, tool_call in enumerate(timing.get("tool_calls", []))
     ]
 
 
@@ -226,6 +279,242 @@ def timing_from_extra(extra: Record) -> Record:
     return timing if isinstance(timing, dict) else {}
 
 
+def enriched_tool_call(
+    tool_call: Record,
+    message: Record,
+    tokenizer,
+    stream_sample_interval_s: float,
+    rendered_observation_owner: bool = False,
+) -> Record:
+    record = dict(tool_call)
+    raw_output = raw_output_from_message(message, record)
+    stdout = str(record.get("stdout") if record.get("stdout") not in (None, "") else raw_output)
+    stderr = str(record.get("stderr") or "")
+    stream_record = {
+        **record,
+        "output": raw_output,
+        "stdout": stdout,
+        "stderr": stderr,
+    }
+
+    record.setdefault("raw_output_chars", len(raw_output))
+    record.setdefault("raw_output_bytes", len(raw_output.encode("utf-8")))
+
+    if tokenizer is not None:
+        record["raw_output_tokens"] = count_tokens(tokenizer, raw_output)
+
+    record.update(stream_timing_summary(tokenizer, stream_record, stream_sample_interval_s))
+
+    if rendered_observation_owner or record.get("rendered_observation_owner"):
+        rendered = rendered_observation_text(message)
+        record.update(rendered_observation_summary(tokenizer, raw_output, rendered))
+
+    return record
+
+
+def raw_output_from_message(message: Record, tool_call: Record) -> str:
+    extra = extra_from_message(message)
+    value = extra.get("raw_output")
+    if value is None:
+        value = tool_call.get("output") or tool_call.get("stdout") or ""
+    return str(value or "")
+
+
+def tokenizer_path_from_trajectory(data: Record) -> str:
+    value = data.get("info", {}).get("config", {}).get("agent", {}).get("tokenizer_path")
+    return str(value or "")
+
+
+def load_tokenizer(tokenizer_path: str | None, *, local_files_only: bool, required: bool = False):
+    if not tokenizer_path:
+        return None
+    cache_key = (str(tokenizer_path), local_files_only)
+    if cache_key not in TOKENIZER_CACHE:
+        try:
+            from transformers import AutoTokenizer
+        except ModuleNotFoundError:
+            if required:
+                raise
+            TOKENIZER_CACHE[cache_key] = None
+            return None
+
+        TOKENIZER_CACHE[cache_key] = AutoTokenizer.from_pretrained(
+            tokenizer_path,
+            trust_remote_code=True,
+            local_files_only=local_files_only,
+        )
+    return TOKENIZER_CACHE[cache_key]
+
+
+def count_tokens(tokenizer, text: str) -> int | None:
+    if tokenizer is None:
+        return None
+    return len(tokenizer.encode(text or "", add_special_tokens=False))
+
+
+def rendered_observation_text(message: Record) -> str:
+    if "content" in message:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(text_part(item) for item in content if text_part(item))
+    if "output" in message:
+        return str(message.get("output") or "")
+    return ""
+
+
+def text_part(item: Any) -> str:
+    if isinstance(item, str):
+        return item
+    if not isinstance(item, dict):
+        return ""
+    value = item.get("text") or item.get("content")
+    return value if isinstance(value, str) else ""
+
+
+def rendered_observation_summary(tokenizer, raw_output: str, rendered: str) -> Record:
+    elided_chars = rendered_elided_chars(rendered)
+    summary: Record = {
+        "was_truncated": elided_chars is not None,
+        "raw_output_chars": len(raw_output),
+    }
+    if tokenizer is not None:
+        summary["rendered_observation_tokens"] = count_tokens(tokenizer, rendered)
+    return summary
+
+
+def rendered_elided_chars(rendered: str) -> int | None:
+    import re
+
+    match = re.search(r"<elided_chars>\s*(\d+)\s*(?:</elided_chars>)?", rendered)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\b(\d+)\s+characters\s+elided\b", rendered)
+    return int(match.group(1)) if match else None
+
+
+def stream_timing_summary(tokenizer, record: Record, stream_sample_interval_s: float) -> Record:
+    if tokenizer is None:
+        return {}
+
+    token_samples = stream_token_samples(tokenizer, record, stream_sample_interval_s)
+    return stream_token_sample_summary(token_samples)
+
+
+def stream_token_samples(tokenizer, record: Record, stream_sample_interval_s: float) -> list[Record]:
+    samples = output_samples_for_record(record, stream_sample_interval_s)
+    if tokenizer is None or not samples:
+        return []
+
+    total = 0
+    rows = []
+    previous_output_chars = 0
+    previous_stdout_bytes = 0
+    previous_stderr_bytes = 0
+    stdout = record.get("stdout", "") or ""
+    stderr = record.get("stderr", "") or ""
+
+    for sample in samples:
+        output_chars = sample.get("output_chars")
+        if output_chars is not None:
+            output_chars = int(output_chars)
+            text = (record.get("output", "") or "")[previous_output_chars:output_chars]
+            previous_output_chars = output_chars
+            stdout_bytes = 0
+            stderr_bytes = 0
+        else:
+            stdout_bytes = int(sample.get("stdout_bytes") or 0)
+            stderr_bytes = int(sample.get("stderr_bytes") or 0)
+            text = text_byte_slice(stdout, previous_stdout_bytes, stdout_bytes)
+            text += text_byte_slice(stderr, previous_stderr_bytes, stderr_bytes)
+        tokens = count_tokens(tokenizer, text) or 0
+        total += tokens
+        row: Record = {
+            "index": sample.get("index"),
+            "t": sample.get("t"),
+            "tokens": tokens,
+            "cumulative_tokens": total,
+        }
+        if output_chars is not None:
+            row["output_chars"] = output_chars
+        else:
+            row["stdout_bytes"] = stdout_bytes
+            row["stderr_bytes"] = stderr_bytes
+            row["output_bytes"] = stdout_bytes + stderr_bytes
+        rows.append(row)
+        if output_chars is None:
+            previous_stdout_bytes = stdout_bytes
+            previous_stderr_bytes = stderr_bytes
+
+    return rows
+
+
+def output_samples_for_record(record: Record, stream_sample_interval_s: float) -> list[Record]:
+    output_events = record.get("output_events") or []
+    duration = number_from(record, "duration_s")
+    if output_events and duration is not None:
+        return output_samples_from_events(
+            output_events,
+            duration,
+            len(record.get("output", "") or ""),
+            final_output_bytes=int(record.get("raw_output_bytes") or len((record.get("output", "") or "").encode("utf-8"))),
+            stream_sample_interval_s=stream_sample_interval_s,
+        )
+    samples = record.get("output_samples") or []
+    return samples if isinstance(samples, list) else []
+
+
+def output_samples_from_events(
+    events: list[Record],
+    duration_s: float,
+    final_output_chars: int,
+    *,
+    final_output_bytes: int | None,
+    stream_sample_interval_s: float,
+) -> list[Record]:
+    first_sample: Record = {"index": 0, "t": 0.0, "output_chars": 0}
+    if final_output_bytes is not None:
+        first_sample["output_bytes"] = 0
+    samples = [first_sample]
+    event_index = 0
+    current_chars = 0
+    current_bytes: int | None = 0 if final_output_bytes is not None else None
+    index = 1
+    while index * stream_sample_interval_s < duration_s:
+        sample_time = index * stream_sample_interval_s
+        while event_index < len(events) and float(events[event_index]["t"]) <= sample_time:
+            current_chars = int(events[event_index]["output_chars"])
+            if current_bytes is not None:
+                current_bytes = int(events[event_index].get("output_bytes") or current_bytes)
+            event_index += 1
+        sample: Record = {"index": index, "t": sample_time, "output_chars": current_chars}
+        if current_bytes is not None:
+            sample["output_bytes"] = current_bytes
+        samples.append(sample)
+        index += 1
+    final_sample: Record = {"index": "final", "t": duration_s, "output_chars": final_output_chars}
+    if final_output_bytes is not None:
+        final_sample["output_bytes"] = final_output_bytes
+    samples.append(final_sample)
+    return samples
+
+
+def stream_token_sample_summary(samples: list[Record]) -> Record:
+    tokens = [int(sample["tokens"]) for sample in samples]
+    return {
+        "stream_max_tokens_per_sample": max(tokens) if tokens else 0,
+        "stream_mean_tokens_per_sample": sum(tokens) / len(tokens) if tokens else None,
+    }
+
+
+def text_byte_slice(text: str, start: int, end: int) -> str:
+    if end <= start:
+        return ""
+    data = (text or "").encode("utf-8")
+    return data[max(0, start) : max(0, end)].decode("utf-8", errors="ignore")
+
+
 def usage_from_message(message: Record, extra: Record) -> Record:
     response = extra.get("response") or (message if "usage" in message else {})
     usage = response.get("usage") or {}
@@ -237,8 +526,6 @@ def usage_from_message(message: Record, extra: Record) -> Record:
         "completion_tokens": usage.get("completion_tokens", usage.get("output_tokens")),
         "total_tokens": usage.get("total_tokens"),
         "finish_reason": choices[0].get("finish_reason") if choices else None,
-        "status": response.get("status"),
-        "incomplete_details": response.get("incomplete_details"),
     }
 
 
@@ -247,8 +534,6 @@ def record_row(record: Record, fields: list[str], instance_id: str, trajectory: 
     row["instance_id"] = instance_id
     row["trajectory"] = str(trajectory)
     row["message_index"] = message_index
-    if row.get("incomplete_details"):
-        row["incomplete_details"] = json.dumps(row["incomplete_details"], sort_keys=True)
     return row
 
 

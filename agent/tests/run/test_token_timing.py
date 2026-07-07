@@ -1,13 +1,12 @@
-import subprocess
+import sys
 
 from minisweagent.run.benchmarks.utils.token_timing import (
     SETUP_COMMANDS,
-    CommandSegment,
+    STREAM_READ_CHUNK_BYTES,
     TokenTimingProgressAgent,
-    instrumented_command,
-    is_setup_segment,
-    parse_instrumented_output,
+    is_setup_command,
     pipeline_category,
+    run_streaming_command,
     shell_tokens,
 )
 
@@ -50,11 +49,6 @@ class FakeEnv:
         return {"info": {"config": {"environment": {}}}}
 
 
-class WordTokenizer:
-    def encode(self, text, add_special_tokens=False):
-        return str(text or "").split()
-
-
 def make_agent(tmp_path):
     env = FakeEnv()
     agent = TokenTimingProgressAgent(
@@ -67,7 +61,6 @@ def make_agent(tmp_path):
         tokenizer_path="",
         output_path=tmp_path / "case.traj.json",
     )
-    agent.tokenizer = WordTokenizer()
     return agent, env
 
 
@@ -76,7 +69,7 @@ def test_unclosed_quotes_do_not_break_command_categorization():
 
     assert shell_tokens(command)
     assert pipeline_category(command) == "python"
-    assert not is_setup_segment(CommandSegment(command, "start"), SETUP_COMMANDS)
+    assert not is_setup_command(command, SETUP_COMMANDS)
 
 
 def test_submission_command_is_not_instrumented(tmp_path):
@@ -90,46 +83,74 @@ def test_submission_command_is_not_instrumented(tmp_path):
     assert agent.tool_metrics == []
 
 
-def test_instrumented_output_records_stderr_and_stream_events():
-    marker = "__TEST_MARKER__"
-    segments = [CommandSegment("printf 'out\\n'; printf 'err\\n' >&2", "start")]
-    command = instrumented_command(segments[0].command, segments, marker)
+def test_setup_command_is_executed_but_not_recorded_as_tool_metric(tmp_path):
+    agent, env = make_agent(tmp_path)
 
-    result = subprocess.run(["bash", "-lc", command], capture_output=True, text=True, check=False)
-    clean_output, records = parse_instrumented_output(result.stdout, marker=marker, segments=segments)
+    output = agent.execute_timed_action({"command": "cd /tmp"})
 
-    assert "out" in clean_output
-    assert "err" in clean_output
-    record = records[0]
-    assert record["first_stdout_ts"] is not None
-    assert record["first_stderr_ts"] is not None
-    assert record["first_output_ts"] == min(record["first_stdout_ts"], record["first_stderr_ts"])
-    assert len(record["stdout_events"]) == 1
-    assert len(record["stderr_events"]) == 1
+    assert env.commands == ["cd /tmp"]
+    assert agent.tool_metrics == []
+    assert output["extra"]["token_timing"]["tool_calls"] == []
 
 
-def test_rendered_observation_metrics_are_owned_once(tmp_path):
-    agent, _ = make_agent(tmp_path)
-    output = {
-        "output": "raw output",
-        "returncode": 0,
-        "exception_info": "",
-        "extra": {
-            "token_timing": {
-                "tool_calls": [
-                    {"command": "echo one"},
-                    {"command": "echo two"},
-                ]
-            }
-        },
-    }
-    messages = [{"role": "tool", "content": "rendered observation words"}]
+def test_empty_command_is_executed_but_not_recorded_as_tool_metric(tmp_path):
+    agent, env = make_agent(tmp_path)
 
-    agent.attach_rendered_observation_metrics([output], messages)
+    output = agent.execute_timed_action({"command": ""})
 
-    first, second = output["extra"]["token_timing"]["tool_calls"]
-    assert first["rendered_observation_owner"] is True
-    assert first["rendered_observation_tokens"] == 3
-    assert first["rendered_chars"] == len("rendered observation words")
-    assert second["rendered_observation_owner"] is False
-    assert "rendered_observation_tokens" not in second
+    assert env.commands == [""]
+    assert agent.tool_metrics == []
+    assert output["extra"]["token_timing"]["tool_calls"] == []
+
+
+def test_tool_metric_keeps_runtime_tokenization_off_critical_path(tmp_path):
+    agent, env = make_agent(tmp_path)
+
+    output = agent.execute_timed_action({"command": "echo hello"})
+
+    assert env.commands == ["echo hello"]
+    assert output["output"] == "done\n"
+    metric = agent.tool_metrics[0]
+    assert "output_tokens" not in metric
+    assert "stream_token_sample_count" not in metric
+    assert "raw_chars" not in metric
+    assert metric["raw_output_chars"] == len("done\n")
+    assert metric["output_events"] == [
+        {
+            "t": metric["output_events"][0]["t"],
+            "output_chars": len("done\n"),
+            "output_bytes": len("done\n"),
+        }
+    ]
+
+
+def test_streaming_command_records_output_as_the_runner_receives_it():
+    code = "import time; print('one ', end='', flush=True); time.sleep(0.12); print('two ', end='', flush=True)"
+
+    output, record = run_streaming_command(cmd=[sys.executable, "-c", code], timeout=5)
+
+    assert output["output"] == "one two "
+    assert record["first_output_ts"] < 0.08
+    assert len(record["output_events"]) >= 2
+    assert record["output_events"][-1]["output_chars"] == len("one two ")
+
+
+def test_streaming_command_does_not_split_small_bursts_at_4k():
+    burst_bytes = 5000
+    code = f"import sys; sys.stdout.buffer.write(b'x' * {burst_bytes}); sys.stdout.flush()"
+
+    output, record = run_streaming_command(cmd=[sys.executable, "-c", code], timeout=5)
+
+    assert STREAM_READ_CHUNK_BYTES > burst_bytes > 4096
+    assert output["output"] == "x" * burst_bytes
+    assert len(record["output_events"]) == 1
+    assert record["output_events"][0]["output_chars"] == burst_bytes
+    assert record["output_events"][0]["output_bytes"] == burst_bytes
+
+
+def test_unflushed_program_output_is_only_visible_after_flush():
+    code = "import time; print('one ', end=''); time.sleep(0.12); print('two ', end='')"
+
+    _, record = run_streaming_command(cmd=[sys.executable, "-c", code], timeout=5)
+
+    assert record["first_output_ts"] >= 0.12
