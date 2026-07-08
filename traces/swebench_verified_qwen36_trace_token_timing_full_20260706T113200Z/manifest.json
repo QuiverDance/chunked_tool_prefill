@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "trace_id": "swebench_verified_qwen36_trace_token_timing_full_20260706T113200Z",
+  "benchmark": "swebench_verified",
+  "subset": "verified",
+  "split": "test",
+  "model": "hosted_vllm/qwen36-27b",
+  "served_model_name": "qwen36-27b",
+  "tokenizer_path": "/home/pjw7200/models/Qwen3.6-27B",
+  "source_run": "runs/swebench_verified_qwen36_trace_token_timing_full_20260706T113200Z",
+  "source_report": "reports/swebench_verified_qwen36_trace_token_timing_full_20260706T113200Z",
+  "report_status": "generated; not tracked",
+  "file_count": 512,
+  "trajectory_count": 500,
+  "approx_size": "237M",
+  "slices": [
+    {
+      "label": "gpu0",
+      "slice": "0:250",
+      "api_base": "http://127.0.0.1:8000/v1"
+    },
+    {
+      "label": "gpu1",
+      "slice": "250:",
+      "api_base": "http://127.0.0.1:8001/v1"
+    }
+  ],
+  "evaluation": {
+    "path": "evaluation/hosted_vllm__qwen36-27b.swebench_verified_qwen36_trace_token_timing_full_20260706T113200Z_eval.json",
+    "total_instances": 500,
+    "submitted_instances": 500,
+    "completed_instances": 77,
+    "resolved_instances": 53,
+    "unresolved_instances": 24,
+    "empty_patch_instances": 2,
+    "error_instances": 421
+  },
+  "notes": [
+    "This is the canonical full SWE-bench Verified token timing trace for the qwen36 run.",
+    "Generated reports are intentionally excluded from git and can be rebuilt from this trace."
+  ]
+}

@@ -2,3 +2,5 @@
 /.conda/
 /external/
 /logs/
+/reports/
+/hosted_vllm__*.json
