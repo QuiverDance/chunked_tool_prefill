@@ -1,0 +1,39 @@
+# Replay-only SWE-bench observation format for streaming-prefill experiments.
+#
+# The normal SWE-bench format puts returncode before output. That is faithful to
+# the agent run, but it prevents command output from being a stable prompt prefix
+# until the command exits. This format moves output first so live command chunks
+# can be prefetched as they arrive.
+replay:
+  stream_output_char_limit: 5000
+
+model:
+  stream_observation_template: "<output>\n{{ output.output[:5000] }}"
+  observation_template: |
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <output>
+    {{ output.output[:5000] -}}
+    </output>
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+    If you're using grep or find and it produced too much output, you can use a more selective search pattern.
+    If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
