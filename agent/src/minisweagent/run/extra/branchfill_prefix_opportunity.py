@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import random
 import statistics
@@ -13,13 +14,60 @@ from typing import Any
 import typer
 from jinja2 import Template
 
-from minisweagent.run.benchmarks.utils.token_timing import pipeline_category
+from minisweagent.run.benchmarks.utils.token_timing import (
+    SETUP_COMMANDS,
+    command_name,
+    is_setup_command,
+    pipeline_category,
+    shell_tokens,
+    split_top_level,
+)
 
 Record = dict[str, Any]
 PAYLOAD_BOUNDARY = "<output>\n"
 TRUNCATED_PAYLOAD_BOUNDARY = "<output_head>\n"
 TRUNCATED_TAIL_BOUNDARY = "<output_tail>\n"
 app = typer.Typer(add_completion=False)
+SHELL_SEPARATORS = ("&&", "||", ";")
+RESOURCE_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".go",
+    ".h",
+    ".java",
+    ".js",
+    ".json",
+    ".md",
+    ".py",
+    ".rs",
+    ".rst",
+    ".sh",
+    ".toml",
+    ".ts",
+    ".yaml",
+    ".yml",
+}
+SUBCOMMAND_TOOLS = {"cargo", "git", "go", "npm", "pip", "pip3", "yarn"}
+FLAGS_WITH_VALUES = {"-C", "--directory"}
+POLICY_NAMES = (
+    "exact_args_recent",
+    "signature_recent",
+    "resource_aware_recent",
+    "command_similarity",
+    "combined",
+)
+TOP_K = (1, 2, 4, 8)
+CANDIDATE_POOLS = ("any_prior", "recorded_category", "same_category", "same_signature", "exact_args")
+
+
+@dataclass(frozen=True)
+class CommandFeatures:
+    effective_command: str
+    category: str
+    signature: str
+    resources: tuple[str, ...]
+    tokens: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -28,7 +76,12 @@ class ToolOutput:
     tool_call_id: str
     tool_name: str
     command: str
+    recorded_command_category: str
     command_category: str
+    effective_command: str
+    command_signature: str
+    resource_keys: tuple[str, ...]
+    command_tokens: frozenset[str]
     exact_args_key: str
     raw_output: str
     raw_tokens: list[int]
@@ -67,8 +120,9 @@ def main(
                         "reuse_ratio": summary["model_visible"][pool]["reuse_ratio"],
                         "reusable_tokens": summary["model_visible"][pool]["reusable_tokens"],
                     }
-                    for pool in ("any_prior", "same_category", "exact_args")
+                    for pool in CANDIDATE_POOLS
                 },
+                "combined_k4": summary["policy_frontier"]["combined"]["4"]["reuse_ratio"],
                 "report": str(output_dir / "report.md"),
             },
             indent=2,
@@ -91,7 +145,8 @@ def run_analysis(run_dir: Path, output_dir: Path, tokenizer: Any) -> Record:
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(output_dir / "per_call.jsonl", rows)
+    write_jsonl(output_dir / "per_call.jsonl.gz", rows)
+    write_jsonl(output_dir / "policy_per_call.jsonl.gz", policy_rows(rows))
     largest_matches = sorted(
         rows,
         key=lambda row: int(row.get("model_visible_any_prior_lcp_tokens") or 0),
@@ -108,7 +163,24 @@ def run_analysis(run_dir: Path, output_dir: Path, tokenizer: Any) -> Record:
             }
         )
     (output_dir / "top_matches.json").write_text(json.dumps(top_matches, indent=2) + "\n")
+    largest_policy_matches = sorted(
+        rows,
+        key=lambda row: int(row.get("policy_combined_k4_lcp_tokens") or 0),
+        reverse=True,
+    )[:50]
+    top_policy_matches = []
+    for row in largest_policy_matches:
+        match = rows_by_call.get((row["trajectory"], row.get("policy_combined_k4_match_call_index")))
+        top_policy_matches.append(
+            {
+                **policy_rows([row])[0],
+                "policy_combined_k4_match_command": match.get("command") if match else None,
+            }
+        )
+    (output_dir / "top_policy_matches.json").write_text(json.dumps(top_policy_matches, indent=2) + "\n")
     summary = build_summary(run_dir, trajectories, rows)
+    (output_dir / "policy_frontier.json").write_text(json.dumps(summary["policy_frontier"], indent=2) + "\n")
+    (output_dir / "policy_categories.json").write_text(json.dumps(summary["policy_categories"], indent=2) + "\n")
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (output_dir / "report.md").write_text(markdown_report(summary))
     return summary
@@ -172,7 +244,11 @@ def analyze_trajectory(
             "tool_call_id": call.tool_call_id,
             "tool_name": call.tool_name,
             "command": call.command,
+            "recorded_command_category": call.recorded_command_category,
             "command_category": call.command_category,
+            "effective_command": call.effective_command,
+            "command_signature": call.command_signature,
+            "resource_keys": list(call.resource_keys),
             "returncode": call.returncode,
             "render_kind": call.render_kind,
             "raw_output_chars": len(call.raw_output),
@@ -201,6 +277,7 @@ def analyze_trajectory(
                 visible_match,
                 call.rendered_prefix_tokens,
             )
+        add_policy_results(row, tokenizer, call, history)
 
         rows.append(row)
         history.append(call)
@@ -242,6 +319,7 @@ def tool_output_from_message(
     metric = metric_from_message(extra, call_id)
     rendered_prefix, render_kind, rendered_payload_tokens = rendered_payload(message, raw_output, tokenizer)
     command = str(action.get("command") or "")
+    features = command_features(command)
     tool_name = str(action.get("tool_name") or "")
     exact_args = {key: value for key, value in action.items() if key not in {"tool_call_id", "tool_name"}}
 
@@ -250,7 +328,12 @@ def tool_output_from_message(
         tool_call_id=call_id,
         tool_name=tool_name,
         command=command,
-        command_category=str(metric.get("command_category") or pipeline_category(command) or tool_name),
+        recorded_command_category=str(metric.get("command_category") or pipeline_category(command) or tool_name),
+        command_category=features.category or tool_name,
+        effective_command=features.effective_command,
+        command_signature=features.signature,
+        resource_keys=features.resources,
+        command_tokens=features.tokens,
         exact_args_key=f"{tool_name}:{json.dumps(exact_args, sort_keys=True, separators=(',', ':'))}",
         raw_output=raw_output,
         raw_tokens=encode(tokenizer, raw_output),
@@ -260,6 +343,86 @@ def tool_output_from_message(
         returncode=integer_or_none(extra.get("returncode")),
         message_index=message_index,
     )
+
+
+def command_features(command: str) -> CommandFeatures:
+    effective = effective_command(command)
+    parts = [part for part, _ in split_top_level(effective, SHELL_SEPARATORS) if part]
+    category = "&&".join(filter(None, (pipeline_category(part) for part in parts)))
+    tokens = feature_tokens(effective)
+    resources = tuple(
+        sorted(
+            {
+                normalized
+                for token in tokens
+                if is_resource(token) and (normalized := normalize_resource(token))
+            }
+        )
+    )
+    signature = " && ".join(command_signature(part) for part in parts)
+    return CommandFeatures(effective, category, signature, resources, frozenset(tokens))
+
+
+def command_signature(command: str) -> str:
+    signatures = [segment_signature(part) for part, _ in split_top_level(command, ("|",)) if part]
+    return " | ".join(filter(None, signatures))
+
+
+def segment_signature(command: str) -> str:
+    tokens = shell_tokens(command)
+    name = command_name(command)
+    start = next((index + 1 for index, token in enumerate(tokens) if Path(token).name == name), len(tokens))
+    flags = []
+    subcommand = ""
+    index = start
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-m" and name == "python" and index + 1 < len(tokens):
+            subcommand = f"-m {tokens[index + 1]}"
+            index += 2
+            continue
+        if token.startswith("-"):
+            flags.append(normalize_flag(token))
+            index += 2 if token in FLAGS_WITH_VALUES else 1
+            continue
+        if not subcommand and name in SUBCOMMAND_TOOLS and not is_resource(token):
+            subcommand = token
+        index += 1
+    return " ".join(filter(None, (name, subcommand, *sorted(set(flags)))))
+
+
+def effective_command(command: str) -> str:
+    parts = split_top_level(command, SHELL_SEPARATORS)
+    while len(parts) > 1 and is_setup_command(parts[0][0], SETUP_COMMANDS):
+        parts.pop(0)
+    return " ".join(f"{part} {separator}".strip() for part, separator in parts).strip()
+
+
+def feature_tokens(command: str) -> list[str]:
+    tokens = []
+    for token in shell_tokens(command)[:256]:
+        if token in {"<<", "<<<"}:
+            break
+        if token in {"&&", "||", ";", "|", "<", ">", ">>", "2>", "2>&1"}:
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def normalize_flag(token: str) -> str:
+    name, separator, _ = token.partition("=")
+    return f"{name}=*" if separator else name
+
+
+def is_resource(token: str) -> bool:
+    return "/" in token or "::" in token or Path(token).suffix.lower() in RESOURCE_SUFFIXES
+
+
+def normalize_resource(token: str) -> str:
+    if token.rstrip("/") == "/testbed":
+        return ""
+    normalized = token.removeprefix("/testbed/").removeprefix("./")
+    return normalized.rstrip("/:,")
 
 
 def metric_from_message(extra: Record, call_id: str) -> Record:
@@ -311,9 +474,100 @@ def decode(tokenizer: Any, token_ids: list[int]) -> str:
 def candidate_pools(call: ToolOutput, history: list[ToolOutput]) -> dict[str, list[ToolOutput]]:
     return {
         "any_prior": list(history),
+        "recorded_category": [
+            candidate
+            for candidate in history
+            if candidate.recorded_command_category == call.recorded_command_category
+        ],
         "same_category": [candidate for candidate in history if candidate.command_category == call.command_category],
+        "same_signature": [
+            candidate
+            for candidate in history
+            if call.command_signature and candidate.command_signature == call.command_signature
+        ],
         "exact_args": [candidate for candidate in history if candidate.exact_args_key == call.exact_args_key],
     }
+
+
+def add_policy_results(
+    row: Record,
+    tokenizer: Any,
+    call: ToolOutput,
+    history: list[ToolOutput],
+) -> None:
+    for policy_name in POLICY_NAMES:
+        ranked = rank_candidates(policy_name, call, history)
+        for k in TOP_K:
+            selected = distinct_outputs(ranked, k)
+            compatible = [candidate for candidate in selected if candidate.render_kind == call.render_kind]
+            lcp, match = best_match(call, compatible, token_field="rendered_prefix_tokens")
+            prefix = f"policy_{policy_name}_k{k}"
+            row[f"{prefix}_selected_count"] = len(selected)
+            row[f"{prefix}_compatible_count"] = len(compatible)
+            row[f"{prefix}_lcp_tokens"] = lcp
+            row[f"{prefix}_match_call_index"] = match.call_index if match else None
+            if policy_name == "combined" and k == 4:
+                row[f"{prefix}_prefix_preview"] = decode(tokenizer, call.rendered_prefix_tokens[:lcp])[:500] if lcp else ""
+
+
+def rank_candidates(policy_name: str, call: ToolOutput, history: list[ToolOutput]) -> list[ToolOutput]:
+    if policy_name == "exact_args_recent":
+        return [candidate for candidate in reversed(history) if candidate.exact_args_key == call.exact_args_key]
+    if policy_name == "signature_recent":
+        return [
+            candidate
+            for candidate in reversed(history)
+            if call.command_signature and candidate.command_signature == call.command_signature
+        ]
+    if policy_name == "resource_aware_recent":
+        candidates = [
+            candidate
+            for candidate in history
+            if call.command_signature and candidate.command_signature == call.command_signature
+        ]
+        return sorted(candidates, key=lambda candidate: (resource_overlap(call, candidate), candidate.call_index), reverse=True)
+    if policy_name == "command_similarity":
+        return sorted(
+            history,
+            key=lambda candidate: (command_similarity(call, candidate), candidate.call_index),
+            reverse=True,
+        )
+    if policy_name == "combined":
+        return sorted(history, key=lambda candidate: combined_rank(call, candidate), reverse=True)
+    raise ValueError(f"Unknown policy: {policy_name}")
+
+
+def distinct_outputs(candidates: list[ToolOutput], k: int) -> list[ToolOutput]:
+    selected = []
+    seen = set()
+    for candidate in candidates:
+        if candidate.raw_output in seen:
+            continue
+        selected.append(candidate)
+        seen.add(candidate.raw_output)
+        if len(selected) == k:
+            break
+    return selected
+
+
+def resource_overlap(call: ToolOutput, candidate: ToolOutput) -> int:
+    return len(set(call.resource_keys) & set(candidate.resource_keys))
+
+
+def command_similarity(call: ToolOutput, candidate: ToolOutput) -> float:
+    union = call.command_tokens | candidate.command_tokens
+    return len(call.command_tokens & candidate.command_tokens) / len(union) if union else 0.0
+
+
+def combined_rank(call: ToolOutput, candidate: ToolOutput) -> tuple[Any, ...]:
+    return (
+        candidate.exact_args_key == call.exact_args_key,
+        bool(call.command_signature and candidate.command_signature == call.command_signature),
+        resource_overlap(call, candidate),
+        candidate.command_category == call.command_category,
+        command_similarity(call, candidate),
+        candidate.call_index,
+    )
 
 
 def best_match(
@@ -361,7 +615,9 @@ def integer_or_none(value: Any) -> int | None:
 
 
 def write_jsonl(path: Path, rows: list[Record]) -> None:
-    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
+    with gzip.open(path, "wt", compresslevel=6) as file:
+        for row in rows:
+            file.write(json.dumps(row, sort_keys=True) + "\n")
 
 
 def build_summary(run_dir: Path, trajectories: list[Path], rows: list[Record]) -> Record:
@@ -381,8 +637,9 @@ def build_summary(run_dir: Path, trajectories: list[Path], rows: list[Record]) -
                 f"{view}_{pool}_lcp_tokens",
                 f"{view}_{pool}_candidate_count" if view == "model_visible" else f"{pool}_candidate_count",
             )
-            for pool in ("any_prior", "same_category", "exact_args")
+            for pool in CANDIDATE_POOLS
         }
+    summary["policy_frontier"] = build_policy_frontier(rows, summary["model_visible"])
     summary["rendering"] = {
         "full_calls": sum(row.get("render_kind") == "full" for row in rows),
         "truncated_calls": sum(row.get("render_kind") == "truncated" for row in rows),
@@ -396,8 +653,61 @@ def build_summary(run_dir: Path, trajectories: list[Path], rows: list[Record]) -
         ),
     }
     summary["command_categories"] = category_breakdown(rows)
+    summary["policy_categories"] = policy_category_breakdown(rows)
     summary["output_length_buckets"] = output_length_breakdown(rows)
     return summary
+
+
+def build_policy_frontier(rows: list[Record], oracle_metrics: Record) -> Record:
+    frontier = {}
+    for policy_name in POLICY_NAMES:
+        frontier[policy_name] = {}
+        for k in TOP_K:
+            prefix = f"policy_{policy_name}_k{k}"
+            metric = summarize_metric(
+                rows,
+                "model_visible_output_tokens",
+                f"{prefix}_lcp_tokens",
+                f"{prefix}_selected_count",
+            )
+            metric["selected_candidates"] = sum(int(row.get(f"{prefix}_selected_count") or 0) for row in rows)
+            metric["compatible_candidates"] = sum(
+                int(row.get(f"{prefix}_compatible_count") or 0) for row in rows
+            )
+            metric["mean_selected_candidates"] = metric["selected_candidates"] / len(rows) if rows else None
+            metric["any_prior_oracle_capture"] = safe_ratio(
+                metric["reusable_tokens"], oracle_metrics["any_prior"]["reusable_tokens"]
+            )
+            metric["same_category_oracle_capture"] = safe_ratio(
+                metric["reusable_tokens"], oracle_metrics["same_category"]["reusable_tokens"]
+            )
+            metric["same_signature_oracle_capture"] = safe_ratio(
+                metric["reusable_tokens"], oracle_metrics["same_signature"]["reusable_tokens"]
+            )
+            frontier[policy_name][str(k)] = metric
+    return frontier
+
+
+def policy_rows(rows: list[Record]) -> list[Record]:
+    identity_fields = (
+        "instance_id",
+        "trajectory",
+        "call_index",
+        "tool_call_id",
+        "command",
+        "command_category",
+        "command_signature",
+        "resource_keys",
+        "render_kind",
+        "model_visible_output_tokens",
+    )
+    return [
+        {
+            **{field: row.get(field) for field in identity_fields},
+            **{key: value for key, value in row.items() if key.startswith("policy_")},
+        }
+        for row in rows
+    ]
 
 
 def summarize_metric(
@@ -495,7 +805,35 @@ def category_breakdown(rows: list[Record]) -> Record:
                         include_ci=False,
                     )
                 )
-                for pool in ("any_prior", "same_category", "exact_args")
+                for pool in CANDIDATE_POOLS
+            },
+        }
+        for category, category_rows in sorted(grouped.items())
+    }
+
+
+def policy_category_breakdown(rows: list[Record]) -> Record:
+    grouped: dict[str, list[Record]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get("command_category") or "unknown")].append(row)
+    return {
+        category: {
+            "tool_call_count": len(category_rows),
+            "output_tokens": sum(int(row.get("model_visible_output_tokens") or 0) for row in category_rows),
+            **{
+                policy_name: {
+                    str(k): compact_metric(
+                        summarize_metric(
+                            category_rows,
+                            "model_visible_output_tokens",
+                            f"policy_{policy_name}_k{k}_lcp_tokens",
+                            f"policy_{policy_name}_k{k}_selected_count",
+                            include_ci=False,
+                        )
+                    )
+                    for k in TOP_K
+                }
+                for policy_name in POLICY_NAMES
             },
         }
         for category, category_rows in sorted(grouped.items())
@@ -606,6 +944,8 @@ REPORT_TEMPLATE = """# BranchFill Prefix Opportunity
 - Restricting candidates to the same command category retains {{ ratio(divide(same_category.reusable_tokens, any_prior.reusable_tokens)) }} of those oracle-reusable tokens.
 - Exact-argument history exists for {{ exact_args.eligible_calls }} calls ({{ ratio(divide(exact_args.eligible_calls, summary.tool_call_count)) }} of all calls). Within those eligible calls it reuses {{ ratio(exact_args.eligible_reuse_ratio) }} of payload tokens, or {{ ratio(exact_args.reuse_ratio) }} globally.
 - Among exact-argument-eligible calls, {{ exact_32.calls }} ({{ ratio(exact_32.eligible_call_rate) }}) reach at least 32 exact prefix tokens.
+- The best four-branch policy is `{{ best_k4_name }}` at {{ ratio(best_k4.reuse_ratio) }} payload reuse, capturing {{ ratio(best_k4.any_prior_oracle_capture) }} of the any-prior oracle. The combined ranker reaches {{ ratio(combined_k4.reuse_ratio) }}.
+- The largest combined-k4 category contribution is `{{ largest_category_name }}` at {{ ratio(largest_category_share) }} of reusable tokens.
 
 ## Oracle reuse
 
@@ -625,6 +965,12 @@ REPORT_TEMPLATE = """# BranchFill Prefix Opportunity
 |---|---:|---:|---:|---:|
 {% for pool in pools %}{% set distribution = summary.model_visible[pool].trajectory_reuse_ratio %}| {{ pool }} | {{ ratio(distribution.p25) }} | {{ ratio(distribution.median) }} | {{ ratio(distribution.p75) }} | {{ ratio(distribution.p90) }} |
 {% endfor %}
+## Causal policy frontier
+
+| Policy | k | Reuse ratio | Any-prior capture | Same-signature capture | Eligible calls | LCP ≥32 calls |
+|---|---:|---:|---:|---:|---:|---:|
+{% for policy, k, metric in frontier_rows %}| {{ policy }} | {{ k }} | {{ ratio(metric.reuse_ratio) }} | {{ ratio(metric.any_prior_oracle_capture) }} | {{ ratio(metric.same_signature_oracle_capture) }} | {{ metric.eligible_calls }} | {{ metric.thresholds['32'].calls }} |
+{% endfor %}
 ## Output-length breakdown
 
 | Output tokens | Calls | Output tokens | Any-prior reusable tokens | Reuse ratio |
@@ -637,19 +983,21 @@ REPORT_TEMPLATE = """# BranchFill Prefix Opportunity
 - Truncated outputs: {{ summary.rendering.truncated_calls }} calls / {{ summary.rendering.truncated_output_tokens }} visible head-and-tail payload tokens
 - Truncated-output reuse is conservatively capped at the visible 5,000-character head.
 
-## Largest command categories
+## Largest effective command categories
 
-| Category | Calls | Output tokens | Any-prior reuse | Exact-args reuse |
-|---|---:|---:|---:|---:|
-{% for category, category_summary in categories %}{% set category_any = category_summary.model_visible.any_prior %}{% set category_exact = category_summary.model_visible.exact_args %}| `{{ category }}` | {{ category_summary.tool_call_count }} | {{ category_any.output_tokens }} | {{ ratio(category_any.reuse_ratio) }} | {{ ratio(category_exact.reuse_ratio) }} |
+| Category | Calls | Output tokens | Any-prior oracle | Same-signature oracle | Combined k1 | Combined k4 |
+|---|---:|---:|---:|---:|---:|---:|
+{% for category, category_summary in categories %}{% set category_any = category_summary.model_visible.any_prior %}{% set category_signature = category_summary.model_visible.same_signature %}{% set policies = summary.policy_categories[category].combined %}| `{{ category }}` | {{ category_summary.tool_call_count }} | {{ category_any.output_tokens }} | {{ ratio(category_any.reuse_ratio) }} | {{ ratio(category_signature.reuse_ratio) }} | {{ ratio(policies['1'].reuse_ratio) }} | {{ ratio(policies['4'].reuse_ratio) }} |
 {% endfor %}
 ## Method
 
-For each tool call, candidates are restricted to completed earlier calls in the same trajectory. The oracle chooses the candidate with the longest exact target-tokenizer prefix. No text normalization or future/cross-trajectory output is used. Candidate pools are all prior calls, the same recorded command category, and exact tool arguments. Calls without a candidate remain in the denominator.
+For each tool call, candidates are restricted to completed earlier calls in the same trajectory. The oracle chooses the candidate with the longest exact target-tokenizer prefix. No text normalization or future/cross-trajectory output is used. Candidate pools are all prior calls, the effective command category after leading setup commands, the normalized command signature, and exact tool arguments. Calls without a candidate remain in the denominator.
+
+Policy ranking uses only the current command and causal history. `exact_args_recent` and `signature_recent` use recency; `resource_aware_recent` prioritizes shared resource keys within a signature; `command_similarity` ranks command-token Jaccard similarity; and `combined` ranks exact arguments, signature, resource overlap, category, similarity, then recency. Identical historical outputs are deduplicated before selecting k branches. These deterministic policies have no trained or dataset-tuned weights.
 
 The model-visible metric requires the candidate and current output to use the same full/truncated rendering form. This preserves the exact formatter boundary and token positions needed for KV reuse. The raw metric compares every causal candidate regardless of rendering form.
 
-`per_call.jsonl` contains every comparison result. `top_matches.json` contains the 50 largest model-visible any-prior matches for manual inspection.
+`per_call.jsonl.gz` contains every comparison result. `policy_per_call.jsonl.gz` and `policy_frontier.json` isolate the causal policy results. `top_matches.json` contains the 50 largest model-visible any-prior matches for manual inspection.
 """
 
 
@@ -659,15 +1007,34 @@ def markdown_report(summary: Record) -> str:
         key=lambda item: item[1]["model_visible"]["any_prior"]["output_tokens"],
         reverse=True,
     )[:20]
+    frontier_rows = [
+        (policy_name, str(k), summary["policy_frontier"][policy_name][str(k)])
+        for policy_name in POLICY_NAMES
+        for k in TOP_K
+    ]
+    best_k4_name = max(POLICY_NAMES, key=lambda name: summary["policy_frontier"][name]["4"]["reuse_ratio"])
+    combined_k4_tokens = summary["policy_frontier"]["combined"]["4"]["reusable_tokens"]
+    largest_category_name, largest_category = max(
+        summary["policy_categories"].items(),
+        key=lambda item: item[1]["combined"]["4"]["reusable_tokens"],
+    )
     return Template(REPORT_TEMPLATE).render(
         summary=summary,
         any_prior=summary["model_visible"]["any_prior"],
         same_category=summary["model_visible"]["same_category"],
         exact_args=summary["model_visible"]["exact_args"],
         exact_32=summary["model_visible"]["exact_args"]["thresholds"]["32"],
+        combined_k4=summary["policy_frontier"]["combined"]["4"],
+        best_k4_name=best_k4_name,
+        best_k4=summary["policy_frontier"][best_k4_name]["4"],
+        largest_category_name=largest_category_name,
+        largest_category_share=safe_ratio(
+            largest_category["combined"]["4"]["reusable_tokens"], combined_k4_tokens
+        ),
         views=("model_visible", "raw"),
-        pools=("any_prior", "same_category", "exact_args"),
+        pools=CANDIDATE_POOLS,
         categories=categories,
+        frontier_rows=frontier_rows,
         ratio=format_ratio,
         divide=safe_ratio,
         number=format_number,
