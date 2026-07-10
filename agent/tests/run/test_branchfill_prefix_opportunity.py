@@ -207,6 +207,33 @@ def test_run_analysis_writes_auditable_records_and_summary(tmp_path: Path) -> No
     assert "Per-trajectory reuse ratio" in report
     assert "Output-length breakdown" in report
     assert "Causal policy frontier" in report
+    assert "Trajectory median" in report
+    assert "95% CI" in report
+
+
+def test_signature_oracle_capture_is_capped_per_call(tmp_path: Path) -> None:
+    trajectory = {
+        "instance_id": "signature-capture-case",
+        "messages": [
+            assistant_message("call-1", "pytest tests/b.py -q"),
+            tool_message("call-1", "abcXXX", "pytest"),
+            assistant_message("call-2", "python -m pytest tests/a.py -q"),
+            tool_message("call-2", "abcdefY", "python"),
+            assistant_message("call-3", "pytest tests/a.py -q"),
+            tool_message("call-3", "abcdefZ", "pytest"),
+        ],
+    }
+    run_dir = tmp_path / "traces"
+    trajectory_path = run_dir / "case.traj.json"
+    trajectory_path.parent.mkdir(parents=True)
+    trajectory_path.write_text(json.dumps(trajectory))
+
+    summary = run_analysis(run_dir, tmp_path / "report", ByteTokenizer())
+
+    command_similarity = summary["policy_frontier"]["command_similarity"]["1"]
+    assert command_similarity["reusable_tokens"] == 9
+    assert summary["model_visible"]["same_signature"]["reusable_tokens"] == 3
+    assert command_similarity["same_signature_oracle_capture"] == 1.0
 
 
 def test_truncated_outputs_reuse_only_the_visible_head_and_do_not_mix_render_kinds() -> None:

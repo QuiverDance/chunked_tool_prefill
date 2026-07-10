@@ -145,8 +145,8 @@ def run_analysis(run_dir: Path, output_dir: Path, tokenizer: Any) -> Record:
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(output_dir / "per_call.jsonl.gz", rows)
-    write_jsonl(output_dir / "policy_per_call.jsonl.gz", policy_rows(rows))
+    write_gzip_jsonl(output_dir / "per_call.jsonl.gz", rows)
+    write_gzip_jsonl(output_dir / "policy_per_call.jsonl.gz", policy_rows(rows))
     largest_matches = sorted(
         rows,
         key=lambda row: int(row.get("model_visible_any_prior_lcp_tokens") or 0),
@@ -614,7 +614,7 @@ def integer_or_none(value: Any) -> int | None:
     return int(value) if value is not None else None
 
 
-def write_jsonl(path: Path, rows: list[Record]) -> None:
+def write_gzip_jsonl(path: Path, rows: list[Record]) -> None:
     with gzip.open(path, "wt", compresslevel=6) as file:
         for row in rows:
             file.write(json.dumps(row, sort_keys=True) + "\n")
@@ -639,7 +639,7 @@ def build_summary(run_dir: Path, trajectories: list[Path], rows: list[Record]) -
             )
             for pool in CANDIDATE_POOLS
         }
-    summary["policy_frontier"] = build_policy_frontier(rows, summary["model_visible"])
+    summary["policy_frontier"] = build_policy_frontier(rows)
     summary["rendering"] = {
         "full_calls": sum(row.get("render_kind") == "full" for row in rows),
         "truncated_calls": sum(row.get("render_kind") == "truncated" for row in rows),
@@ -658,7 +658,7 @@ def build_summary(run_dir: Path, trajectories: list[Path], rows: list[Record]) -
     return summary
 
 
-def build_policy_frontier(rows: list[Record], oracle_metrics: Record) -> Record:
+def build_policy_frontier(rows: list[Record]) -> Record:
     frontier = {}
     for policy_name in POLICY_NAMES:
         frontier[policy_name] = {}
@@ -675,17 +675,32 @@ def build_policy_frontier(rows: list[Record], oracle_metrics: Record) -> Record:
                 int(row.get(f"{prefix}_compatible_count") or 0) for row in rows
             )
             metric["mean_selected_candidates"] = metric["selected_candidates"] / len(rows) if rows else None
-            metric["any_prior_oracle_capture"] = safe_ratio(
-                metric["reusable_tokens"], oracle_metrics["any_prior"]["reusable_tokens"]
+            metric["any_prior_oracle_capture"] = oracle_capture(
+                rows,
+                f"{prefix}_lcp_tokens",
+                "model_visible_any_prior_lcp_tokens",
             )
-            metric["same_category_oracle_capture"] = safe_ratio(
-                metric["reusable_tokens"], oracle_metrics["same_category"]["reusable_tokens"]
+            metric["same_category_oracle_capture"] = oracle_capture(
+                rows,
+                f"{prefix}_lcp_tokens",
+                "model_visible_same_category_lcp_tokens",
             )
-            metric["same_signature_oracle_capture"] = safe_ratio(
-                metric["reusable_tokens"], oracle_metrics["same_signature"]["reusable_tokens"]
+            metric["same_signature_oracle_capture"] = oracle_capture(
+                rows,
+                f"{prefix}_lcp_tokens",
+                "model_visible_same_signature_lcp_tokens",
             )
             frontier[policy_name][str(k)] = metric
     return frontier
+
+
+def oracle_capture(rows: list[Record], policy_lcp_field: str, oracle_lcp_field: str) -> float | None:
+    oracle_tokens = sum(int(row.get(oracle_lcp_field) or 0) for row in rows)
+    captured_tokens = sum(
+        min(int(row.get(policy_lcp_field) or 0), int(row.get(oracle_lcp_field) or 0))
+        for row in rows
+    )
+    return safe_ratio(captured_tokens, oracle_tokens)
 
 
 def policy_rows(rows: list[Record]) -> list[Record]:
@@ -789,9 +804,6 @@ def bootstrap_reuse_ratio(
 
 
 def category_breakdown(rows: list[Record]) -> Record:
-    grouped: dict[str, list[Record]] = defaultdict(list)
-    for row in rows:
-        grouped[str(row.get("command_category") or "unknown")].append(row)
     return {
         category: {
             "tool_call_count": len(category_rows),
@@ -808,14 +820,11 @@ def category_breakdown(rows: list[Record]) -> Record:
                 for pool in CANDIDATE_POOLS
             },
         }
-        for category, category_rows in sorted(grouped.items())
+        for category, category_rows in sorted(rows_by_category(rows).items())
     }
 
 
 def policy_category_breakdown(rows: list[Record]) -> Record:
-    grouped: dict[str, list[Record]] = defaultdict(list)
-    for row in rows:
-        grouped[str(row.get("command_category") or "unknown")].append(row)
     return {
         category: {
             "tool_call_count": len(category_rows),
@@ -836,8 +845,15 @@ def policy_category_breakdown(rows: list[Record]) -> Record:
                 for policy_name in POLICY_NAMES
             },
         }
-        for category, category_rows in sorted(grouped.items())
+        for category, category_rows in sorted(rows_by_category(rows).items())
     }
+
+
+def rows_by_category(rows: list[Record]) -> dict[str, list[Record]]:
+    grouped: dict[str, list[Record]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get("command_category") or "unknown")].append(row)
+    return grouped
 
 
 def compact_metric(metric: Record) -> Record:
@@ -967,9 +983,9 @@ REPORT_TEMPLATE = """# BranchFill Prefix Opportunity
 {% endfor %}
 ## Causal policy frontier
 
-| Policy | k | Reuse ratio | Any-prior capture | Same-signature capture | Eligible calls | LCP ≥32 calls |
-|---|---:|---:|---:|---:|---:|---:|
-{% for policy, k, metric in frontier_rows %}| {{ policy }} | {{ k }} | {{ ratio(metric.reuse_ratio) }} | {{ ratio(metric.any_prior_oracle_capture) }} | {{ ratio(metric.same_signature_oracle_capture) }} | {{ metric.eligible_calls }} | {{ metric.thresholds['32'].calls }} |
+| Policy | k | Reuse ratio | 95% CI | Trajectory median (P25–P75) | Any-prior capture | Same-signature capture | Eligible calls | LCP ≥32 calls |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+{% for policy, k, metric in frontier_rows %}| {{ policy }} | {{ k }} | {{ ratio(metric.reuse_ratio) }} | {{ ratio(metric.reuse_ratio_ci95.low) }}–{{ ratio(metric.reuse_ratio_ci95.high) }} | {{ ratio(metric.trajectory_reuse_ratio.median) }} ({{ ratio(metric.trajectory_reuse_ratio.p25) }}–{{ ratio(metric.trajectory_reuse_ratio.p75) }}) | {{ ratio(metric.any_prior_oracle_capture) }} | {{ ratio(metric.same_signature_oracle_capture) }} | {{ metric.eligible_calls }} | {{ metric.thresholds['32'].calls }} |
 {% endfor %}
 ## Output-length breakdown
 
@@ -994,6 +1010,8 @@ REPORT_TEMPLATE = """# BranchFill Prefix Opportunity
 For each tool call, candidates are restricted to completed earlier calls in the same trajectory. The oracle chooses the candidate with the longest exact target-tokenizer prefix. No text normalization or future/cross-trajectory output is used. Candidate pools are all prior calls, the effective command category after leading setup commands, the normalized command signature, and exact tool arguments. Calls without a candidate remain in the denominator.
 
 Policy ranking uses only the current command and causal history. `exact_args_recent` and `signature_recent` use recency; `resource_aware_recent` prioritizes shared resource keys within a signature; `command_similarity` ranks command-token Jaccard similarity; and `combined` ranks exact arguments, signature, resource overlap, category, similarity, then recency. Identical historical outputs are deduplicated before selecting k branches. These deterministic policies have no trained or dataset-tuned weights.
+
+Oracle capture is computed per call as the policy LCP capped by that call's oracle LCP, then summed over the oracle tokens. It therefore measures how much of the named oracle opportunity the policy covers and cannot exceed 100%.
 
 The model-visible metric requires the candidate and current output to use the same full/truncated rendering form. This preserves the exact formatter boundary and token positions needed for KV reuse. The raw metric compares every causal candidate regardless of rendering form.
 
