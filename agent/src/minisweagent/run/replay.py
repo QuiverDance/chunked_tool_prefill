@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import copy
+import itertools
 import json
-import math
 import threading
 import time
 import uuid
@@ -53,7 +53,14 @@ class TraceToolCall:
 
 @dataclass(frozen=True)
 class ToolPrefillSeed:
+    cached_prefix_len: int
     seed_prefix_len: int
+
+
+@dataclass(frozen=True)
+class ToolPhaseResult:
+    stats: dict[str, Any]
+    prefill_seed: ToolPrefillSeed | None
 
 
 @dataclass(frozen=True)
@@ -117,14 +124,15 @@ class AsyncPrefillWorker:
         self.thread = threading.Thread(target=self.run, name="trace-replay-prefill-worker", daemon=True)
         self.thread.start()
 
-    def submit(self, request: AsyncPrefillRequest) -> None:
+    def submit(self, request: AsyncPrefillRequest) -> bool:
         with self.condition:
             if self.error is not None:
                 raise self.error
-            if self.closed:
-                return
+            if self.closed or self.pending is not None:
+                return False
             self.pending = request
             self.condition.notify()
+            return True
 
     def snapshot(self) -> dict[str, Any]:
         with self.condition:
@@ -442,20 +450,16 @@ class TraceReplayRunner:
                 break
 
             history_after_assistant = history + [turn.assistant]
-            prefill_seed = (
-                self.prefill_seed(history_after_assistant)
-                if self.algorithm == "chunked" and turn.has_next_assistant
-                else None
-            )
             try:
-                tool_stats = self.simulate_tool_phase(
+                tool_phase = self.simulate_tool_phase(
                     instance_id=scenario.instance_id,
                     step_index=turn.step_index,
                     cache_salt=cache_salt,
+                    cached_prompt_ids=prompt_ids,
                     history_after_assistant=history_after_assistant,
                     actions=turn.actions,
                     trace_tools=turn.trace_tools,
-                    prefill_seed=prefill_seed,
+                    prefill_enabled=self.algorithm == "chunked" and turn.has_next_assistant,
                 )
             except ReplayError as e:
                 measurement.valid = False
@@ -465,6 +469,8 @@ class TraceReplayRunner:
                 completed_all_turns = False
                 break
 
+            tool_stats = tool_phase.stats
+            prefill_seed = tool_phase.prefill_seed
             final_tool_messages = self.observation_messages(turn.actions, [tool.output for tool in turn.trace_tools])
             final_messages = history_after_assistant + final_tool_messages
             final_prompt_state = None
@@ -475,11 +481,18 @@ class TraceReplayRunner:
                     len(final_prompt_state.token_ids)
                     - max(
                         int(tool_stats.get("prefill_completed_prompt_tokens") or 0),
-                        prefill_seed.seed_prefix_len,
+                        prefill_seed.cached_prefix_len,
                     ),
                 )
                 tool_stats["unprefilled_prompt_suffix_tokens"] = unprefilled_suffix_tokens
-                tool_stats["unprefilled_tool_output_tokens"] = unprefilled_suffix_tokens
+                tool_stats["unprefilled_tool_output_tokens"] = max(
+                    0,
+                    len(final_prompt_state.token_ids)
+                    - max(
+                        int(tool_stats.get("prefill_completed_prompt_tokens") or 0),
+                        prefill_seed.seed_prefix_len,
+                    ),
+                )
             measurement.tool_stats = tool_stats
             measurements.append(measurement)
 
@@ -528,9 +541,20 @@ class TraceReplayRunner:
         measurement.cached_tokens = result.get("cached_tokens")
         return measurement
 
-    def prefill_seed(self, history_after_assistant: list[dict[str, Any]]) -> ToolPrefillSeed:
+    def prefill_seed(
+        self,
+        history_after_assistant: list[dict[str, Any]],
+        *,
+        cached_prompt_ids: list[int],
+    ) -> ToolPrefillSeed:
         seed_state = self.tokenizer.encode_messages_with_state(history_after_assistant, add_generation_prompt=False)
-        return ToolPrefillSeed(seed_prefix_len=len(seed_state.token_ids))
+        return ToolPrefillSeed(
+            cached_prefix_len=align_down(
+                common_prefix_length(cached_prompt_ids, seed_state.token_ids),
+                self.cache_block_tokens,
+            ),
+            seed_prefix_len=len(seed_state.token_ids),
+        )
 
     def simulate_tool_phase(
         self,
@@ -538,11 +562,12 @@ class TraceReplayRunner:
         instance_id: str,
         step_index: int,
         cache_salt: str,
+        cached_prompt_ids: list[int],
         history_after_assistant: list[dict[str, Any]],
         actions: list[dict[str, Any]],
         trace_tools: list[TraceToolCall],
-        prefill_seed: ToolPrefillSeed | None,
-    ) -> dict[str, Any]:
+        prefill_enabled: bool,
+    ) -> ToolPhaseResult:
         total_duration = sum(max(0.0, tool.duration_s) for tool in trace_tools)
         stats = {
             "tool_call_count": len(trace_tools),
@@ -567,31 +592,47 @@ class TraceReplayRunner:
             "active_prefill_cancel_latency_s": None,
             "active_prefill_cancel_error": "",
         }
-        if self.algorithm == "baseline" or prefill_seed is None or not trace_tools:
+        if not prefill_enabled or not trace_tools:
             self.sleep_scaled(total_duration)
-            return stats
+            return ToolPhaseResult(stats=stats, prefill_seed=None)
+
+        phase_start = self.now()
+        phase_deadline = (
+            phase_start + total_duration * self.time_scale
+            if self.time_scale > 0
+            else None
+        )
+        prefill_seed = self.prefill_seed(
+            history_after_assistant,
+            cached_prompt_ids=cached_prompt_ids,
+        )
+        if phase_deadline is not None and self.now() >= phase_deadline:
+            return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
 
         worker = AsyncPrefillWorker(self.backend, now=self.now)
-        phase_start = self.now()
-        last_prefix_len = prefill_seed.seed_prefix_len
-        last_visible_chars_by_tool = [0 for _ in trace_tools]
+        last_prefix_len = prefill_seed.cached_prefix_len
         completed_outputs: list[dict[str, Any]] = []
         elapsed_before_tool = 0.0
 
         try:
             for action_index, tool in enumerate(trace_tools):
                 available_token_ids: list[int] | None = None
-                for check_time, raw_visible_chars in iter_visible_checkpoints(
-                    tool.output_events,
-                    tool.duration_s,
-                    len(tool.raw_output),
-                    self.prefill_check_interval_s,
-                ):
+                last_visible_chars = -1
+                checkpoints = itertools.chain(
+                    [(0.0, 0)],
+                    iter_visible_checkpoints(
+                        tool.output_events,
+                        tool.duration_s,
+                        len(tool.raw_output),
+                        self.prefill_check_interval_s,
+                    ),
+                )
+                for check_time, raw_visible_chars in checkpoints:
                     self.sleep_until(phase_start, elapsed_before_tool + check_time)
+                    if phase_deadline is not None and self.now() >= phase_deadline:
+                        break
                     visible_chars = self.clamp_stream_output_chars(raw_visible_chars)
-                    if visible_chars <= 0:
-                        continue
-                    if visible_chars != last_visible_chars_by_tool[action_index]:
+                    if visible_chars != last_visible_chars:
                         partial_output = tool.output | {"output": tool.raw_output[:visible_chars]}
                         available_token_ids = self.available_prefill_token_ids(
                             history_after_assistant=history_after_assistant,
@@ -600,16 +641,18 @@ class TraceReplayRunner:
                             action_index=action_index,
                             partial_output=partial_output,
                         )
-                        last_visible_chars_by_tool[action_index] = visible_chars
+                        last_visible_chars = visible_chars
                     if available_token_ids is None:
                         continue
+                    if phase_deadline is not None and self.now() >= phase_deadline:
+                        break
 
                     prefill_token_ids = self.next_prefill_chunk(available_token_ids, last_prefix_len=last_prefix_len)
                     if prefill_token_ids is None:
                         continue
                     prefix_len = len(prefill_token_ids)
 
-                    worker.submit(
+                    submitted = worker.submit(
                         AsyncPrefillRequest(
                             token_ids=prefill_token_ids,
                             cache_salt=cache_salt,
@@ -618,6 +661,8 @@ class TraceReplayRunner:
                             request_id=f"{cache_salt}:tool_output:{uuid.uuid4().hex}",
                         )
                     )
+                    if not submitted:
+                        continue
                     stats["prefill_submitted_count"] += 1
                     last_prefix_len = prefix_len
 
@@ -625,18 +670,26 @@ class TraceReplayRunner:
                 completed_outputs.append(tool.output)
                 elapsed_before_tool += max(0.0, tool.duration_s)
 
-            tool_end = self.now()
+            tool_end = phase_deadline if phase_deadline is not None else self.now()
             worker.raise_if_error()
             completed = [completion for completion in worker.completed_prefills() if completion.finished_at <= tool_end]
-            completed_prefix_len = max((completion.prefix_len for completion in completed), default=prefill_seed.seed_prefix_len)
+            completed_prefix_len = max(
+                (completion.prefix_len for completion in completed),
+                default=prefill_seed.cached_prefix_len,
+            )
             stats["prefill_completed_count"] = len(completed)
             stats["prefill_completed_prompt_tokens"] = completed_prefix_len
-            prefilled_suffix_tokens = max(0, completed_prefix_len - prefill_seed.seed_prefix_len)
-            stats["prefilled_prompt_suffix_tokens"] = prefilled_suffix_tokens
-            stats["prefilled_tool_output_tokens"] = prefilled_suffix_tokens
+            stats["prefilled_prompt_suffix_tokens"] = max(
+                0,
+                completed_prefix_len - prefill_seed.cached_prefix_len,
+            )
+            stats["prefilled_tool_output_tokens"] = max(
+                0,
+                completed_prefix_len - prefill_seed.seed_prefix_len,
+            )
             stats.update(worker.snapshot())
             stats.update(worker.cancel_active())
-            return stats
+            return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
         finally:
             worker.stop_without_drain()
 
@@ -662,7 +715,7 @@ class TraceReplayRunner:
         chunk_tokens = align_down(self.prefill_chunk_tokens, self.cache_block_tokens)
         if chunk_tokens <= 0:
             chunk_tokens = self.cache_block_tokens
-        prefix_len = align_down(last_prefix_len + chunk_tokens, self.cache_block_tokens)
+        prefix_len = last_prefix_len + chunk_tokens
         if prefix_len <= last_prefix_len:
             return None
         if len(available_token_ids) < prefix_len:
@@ -726,13 +779,12 @@ def prepare_replay_scenario(path: Path, data: dict[str, Any]) -> ReplayScenario:
         after_tools_index = index + 1 + len(tool_messages)
         model_call = copy.deepcopy(trace_model_call(message))
         trace_completion_tokens = int_or_none(model_call.get("completion_tokens"))
-        trace_ttft = number(model_call.get("ttft_s"))
-        if trace_completion_tokens is None or trace_ttft is None:
+        if trace_completion_tokens is None:
             return ReplayScenario(
                 path=path,
                 instance_id=instance_id,
                 turns=turns,
-                terminal_invalid=invalid_record(path, instance_id, step_index, "missing_trace_model_timing"),
+                terminal_invalid=invalid_record(path, instance_id, step_index, "missing_trace_completion_tokens"),
             )
 
         assistant = copy.deepcopy(message)
@@ -887,11 +939,7 @@ def iter_visible_checkpoints(
         yield from event_time_checkpoints(events, duration_s, output_chars)
         return
 
-    first_event = next((event for event in events if number(event.get("t")) is not None), None)
-    if first_event is None:
-        return
-
-    index = math.ceil(max(0.0, number(first_event.get("t")) or 0.0) / interval_s)
+    index = 1
     event_index = 0
     visible = 0
     while (check := round(index * interval_s, 12)) < duration_s:
@@ -1051,6 +1099,13 @@ def align_down(value: int, block_size: int) -> int:
     if block_size <= 1:
         return value
     return (value // block_size) * block_size
+
+
+def common_prefix_length(first: list[int], second: list[int]) -> int:
+    for index, (first_token, second_token) in enumerate(zip(first, second)):
+        if first_token != second_token:
+            return index
+    return min(len(first), len(second))
 
 
 def mistral_safe_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

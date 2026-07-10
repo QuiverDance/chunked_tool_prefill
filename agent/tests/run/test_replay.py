@@ -1,103 +1,102 @@
 import json
+import threading
 import time
 
-import pytest
-
 from minisweagent.run.replay import (
-    LiveReplayRunner,
     ReplayTokenizer,
+    TraceReplayRunner,
     collect_trajectory_files,
+    iter_visible_checkpoints,
     main,
+    mistral_safe_messages,
+    prepare_replay_scenario,
+    runner_kwargs,
 )
 from minisweagent.run.replay_backend import completion_chunk_has_generated_payload
 from minisweagent.run.replay_messages import tokenizer_safe_messages
-from minisweagent.run.replay_metrics import (
-    live_stream_burst_stats,
-    record_for_output,
-)
-from minisweagent.run.replay_types import (
-    LiveCommandResult,
-    LiveOutputEvent,
-)
+from minisweagent.run.replay_metrics import record_for_output
 
 
-def make_trajectory() -> dict:
+def make_trajectory(raw_output: str = "trace-output") -> dict:
     return {
         "info": {
             "config": {
                 "agent": {"tokenizer_path": "", "tokenizer_local_files_only": True},
-                "model": {"model_name": "hosted_vllm/fake-model", "model_kwargs": {"api_base": "http://127.0.0.1:9/v1"}},
+                "model": {
+                    "model_name": "hosted_vllm/fake-model",
+                    "model_kwargs": {"api_base": "http://127.0.0.1:9/v1"},
+                    "observation_template": "<output>{{ output.output }}</output><returncode>{{ output.returncode }}</returncode>",
+                    "stream_observation_template": "<output>{{ output.output }}",
+                },
             }
         },
         "instance_id": "case-1",
         "messages": [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "task"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "bash", "arguments": "{\"command\": \"printf one\"}"},
-                    }
-                ],
-                "extra": {"actions": [{"command": "printf one", "tool_call_id": "call_1"}]},
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call_1",
-                "content": "<returncode>0</returncode>\n<output>one two</output>",
-                "extra": {"raw_output": "one two", "returncode": 0},
-            },
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_2",
-                        "type": "function",
-                        "function": {"name": "bash", "arguments": "{\"command\": \"pwd\"}"},
-                    }
-                ],
-                "extra": {
-                    "actions": [{"command": "pwd", "tool_call_id": "call_2"}],
-                    "token_timing": {"model_call": {"ttft_s": 0.25}},
-                },
-            },
+            assistant_message(0, "printf SHOULD_NOT_RUN", completion_tokens=5),
+            tool_message(raw_output, duration_s=0.02, events=[{"t": 0.005, "output_chars": len(raw_output)}]),
+            assistant_message(1, "echo done", completion_tokens=7),
+            tool_message("done", duration_s=0.01, events=[{"t": 0.005, "output_chars": 4}]),
+            {"role": "exit", "content": "done"},
         ],
     }
 
 
-def output_first_config(tmp_path, command: str) -> dict:
-    data = make_trajectory()
-    config = data["info"]["config"]
-    config["environment_type"] = "minisweagent.environments.local.LocalEnvironment"
-    config["environment"] = {"cwd": str(tmp_path), "timeout": 5}
-    config["model"]["observation_template"] = """
-<output>
-{{ output.output -}}
-</output>
-<returncode>{{output.returncode}}</returncode>
-"""
-    data["messages"][2]["extra"]["actions"] = [{"command": command, "tool_call_id": "call_1"}]
-    return data
+def assistant_message(index: int, command: str, *, completion_tokens: int) -> dict:
+    tool_call_id = f"call_{index}"
+    return {
+        "role": "assistant",
+        "content": f"thought {index}",
+        "tool_calls": [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": "bash", "arguments": json.dumps({"command": command})},
+            }
+        ],
+        "extra": {
+            "actions": [{"command": command, "tool_call_id": tool_call_id}],
+            "timestamp": float(index),
+            "token_timing": {
+                "model_call": {
+                    "prompt_tokens": 10 + index,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": 10 + index + completion_tokens,
+                    "finish_reason": "tool_calls",
+                    "ttft_s": 0.1 + index,
+                    "model_total_s": 0.2 + index,
+                    "decode_s": 0.1,
+                }
+            },
+        },
+    }
 
 
-def output_first_trajectory(tmp_path) -> dict:
-    return output_first_config(tmp_path, "printf one")
-
-
-class FakeClock:
-    def __init__(self):
-        self.value = 0.0
-
-    def sleep(self, seconds):
-        self.value += max(0.0, seconds)
-
-    def now(self):
-        return self.value
+def tool_message(raw_output: str, *, duration_s: float, events: list[dict]) -> dict:
+    return {
+        "role": "tool",
+        "tool_call_id": "call_0",
+        "content": raw_output,
+        "extra": {
+            "raw_output": raw_output,
+            "returncode": 0,
+            "exception_info": "",
+            "timestamp": duration_s,
+            "token_timing": {
+                "tool_calls": [
+                    {
+                        "duration_s": duration_s,
+                        "time_to_first_output_s": events[0]["t"] if events else None,
+                        "returncode": 0,
+                        "raw_output_chars": len(raw_output),
+                        "raw_output_bytes": len(raw_output.encode()),
+                        "output_events": events,
+                    }
+                ]
+            },
+        },
+    }
 
 
 class TinyTemplateTokenizer:
@@ -116,65 +115,169 @@ class TinyTemplateTokenizer:
         return {"input_ids": self.encode(text, add_special_tokens=add_special_tokens)}
 
 
-class FakeBackend:
-    def __init__(self, clock: FakeClock, *, prefill_delay: float = 0.0):
+class CountingReplayTokenizer(ReplayTokenizer):
+    def __init__(self):
+        super().__init__(TinyTemplateTokenizer())
+        self.encode_calls = 0
+
+    def encode_messages_with_state(self, messages, *, add_generation_prompt):
+        self.encode_calls += 1
+        return super().encode_messages_with_state(messages, add_generation_prompt=add_generation_prompt)
+
+
+class DelayedSeedTokenizer(ReplayTokenizer):
+    def __init__(self, clock, delay):
+        super().__init__(TinyTemplateTokenizer())
         self.clock = clock
-        self.prefill_delay = prefill_delay
+        self.delay = delay
+
+    def encode_messages_with_state(self, messages, *, add_generation_prompt):
+        if messages and messages[-1].get("role") == "assistant" and not add_generation_prompt:
+            self.clock.sleep(self.delay)
+        return super().encode_messages_with_state(messages, add_generation_prompt=add_generation_prompt)
+
+
+class CommandTemplateTokenizer(TinyTemplateTokenizer):
+    def apply_chat_template(self, messages, *, tools=None, tokenize=False, add_generation_prompt=False):
+        lines = []
+        for message in messages:
+            text = f"{message.get('role')}:{message.get('content') or ''}"
+            for tool_call in message.get("tool_calls") or []:
+                text += str((tool_call.get("function") or {}).get("arguments") or "")
+            lines.append(text)
+        text = "\n".join(lines)
+        if add_generation_prompt:
+            text += "\nassistant:"
+        return self.encode(text, add_special_tokens=False) if tokenize else text
+
+
+class DelayedCommandTokenizer(ReplayTokenizer):
+    def __init__(self, clock, delay):
+        super().__init__(CommandTemplateTokenizer())
+        self.clock = clock
+        self.delay = delay
+
+    def encode_messages_with_state(self, messages, *, add_generation_prompt):
+        if messages and messages[-1].get("role") == "assistant" and not add_generation_prompt:
+            self.clock.sleep(self.delay)
+        return super().encode_messages_with_state(messages, add_generation_prompt=add_generation_prompt)
+
+
+class DelayedPartialPromptTokenizer(ReplayTokenizer):
+    def __init__(self, clock, delay):
+        super().__init__(CommandTemplateTokenizer())
+        self.clock = clock
+        self.delay = delay
+
+    def encode_messages_with_state(self, messages, *, add_generation_prompt):
+        if messages and messages[-1].get("role") == "tool" and add_generation_prompt:
+            self.clock.sleep(self.delay)
+        return super().encode_messages_with_state(messages, add_generation_prompt=add_generation_prompt)
+
+
+class DivergingGenerationPromptTokenizer(CommandTemplateTokenizer):
+    def apply_chat_template(self, messages, *, tools=None, tokenize=False, add_generation_prompt=False):
+        text = super().apply_chat_template(
+            messages,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        if add_generation_prompt:
+            text += "\ngeneration-marker-that-is-not-an-assistant-prefix"
+        return self.encode(text, add_special_tokens=False) if tokenize else text
+
+
+class FakeClock:
+    def __init__(self):
+        self.value = 0.0
+
+    def sleep(self, seconds):
+        self.value += max(0.0, seconds)
+        time.sleep(0.001)
+
+    def now(self):
+        return self.value
+
+
+class FakeBackend:
+    def __init__(self):
+        self.generations = []
         self.prefills = []
-        self.prefill_texts = []
-        self.measured_token_texts = []
         self.cancelled_prefills = []
 
-    def start_trial(self, trial_name, step):
-        return trial_name
+    def generate_tokens(self, token_ids, *, max_tokens, cache_salt, step, label):
+        text = bytes(token_ids).decode("utf-8")
+        self.generations.append({"text": text, "max_tokens": max_tokens, "cache_salt": cache_salt, "label": label})
+        return {
+            "ttft_s": 0.01,
+            "model_total_s": 0.02,
+            "decode_s": 0.01,
+            "completion_tokens": max_tokens,
+            "cached_tokens": len(token_ids),
+        }
 
     def prefill(self, token_ids, *, cache_salt, step, label, request_id=None):
-        self.prefills.append((cache_salt, label, len(token_ids)))
-        try:
-            self.prefill_texts.append((label, bytes(token_ids).decode("utf-8")))
-        except ValueError:
-            self.prefill_texts.append((label, ""))
-        self.clock.sleep(self.prefill_delay)
+        self.prefills.append(
+            {
+                "text": bytes(token_ids).decode("utf-8"),
+                "tokens": len(token_ids),
+                "cache_salt": cache_salt,
+                "label": label,
+                "request_id": request_id,
+            }
+        )
 
     def cancel_prefill(self, request_id):
         self.cancelled_prefills.append(request_id)
 
-    def measure_ttft_tokens(self, token_ids, *, cache_salt, step):
-        self.measured_token_texts.append(bytes(token_ids).decode("utf-8"))
-        start = self.clock.now()
-        ttft = 0.1
-        return {
-            "ttft_s": ttft,
-            "request_start_at": start,
-            "first_token_at": start + ttft,
-            "cached_tokens": len(token_ids),
-            "prompt_tokens": len(token_ids),
-        }
 
-
-class SlowBackend(FakeBackend):
-    def __init__(self, clock: FakeClock, *, delay: float):
-        super().__init__(clock)
-        self.delay = delay
+class BlockingPrefillBackend(FakeBackend):
+    def __init__(self):
+        super().__init__()
+        self.release = threading.Event()
 
     def prefill(self, token_ids, *, cache_salt, step, label, request_id=None):
-        time.sleep(self.delay)
-        super().prefill(token_ids, cache_salt=cache_salt, step=step, label=label, request_id=request_id)
+        super().prefill(
+            token_ids,
+            cache_salt=cache_salt,
+            step=step,
+            label=label,
+            request_id=request_id,
+        )
+        self.release.wait(timeout=1)
+
+    def cancel_prefill(self, request_id):
+        super().cancel_prefill(request_id)
+        self.release.set()
 
 
-class SlowTokenizer(ReplayTokenizer):
-    def __init__(self, *, delay: float):
-        super().__init__(TinyTemplateTokenizer())
-        self.delay = delay
+def make_runner(backend, data, *, algorithm="baseline", clock=None, **kwargs):
+    clock = clock or FakeClock()
+    return TraceReplayRunner(
+        backend,
+        ReplayTokenizer(TinyTemplateTokenizer()),
+        data["info"]["config"],
+        algorithm=algorithm,
+        time_scale=1,
+        sleep=clock.sleep,
+        now=clock.now,
+        **kwargs,
+    )
 
-    def encode_messages(self, messages, *, add_generation_prompt):
-        if messages and messages[-1].get("role") == "tool":
-            time.sleep(self.delay)
-        return super().encode_messages(messages, add_generation_prompt=add_generation_prompt)
 
-    def count_text_tokens(self, text):
-        time.sleep(self.delay)
-        return super().count_text_tokens(text)
+def make_runner_with_tokenizer(backend, data, tokenizer, *, algorithm="baseline", clock=None, **kwargs):
+    clock = clock or FakeClock()
+    return TraceReplayRunner(
+        backend,
+        tokenizer,
+        data["info"]["config"],
+        algorithm=algorithm,
+        time_scale=1,
+        sleep=clock.sleep,
+        now=clock.now,
+        **kwargs,
+    )
 
 
 def test_tokenizer_safe_messages_parse_tool_call_arguments():
@@ -200,89 +303,471 @@ def test_tokenizer_safe_messages_parse_tool_call_arguments():
     assert messages[0]["tool_calls"][0]["function"]["arguments"] == "{\"command\": \"pwd\"}"
 
 
-def test_incremental_tokenization_matches_full_suffix_tokenization():
-    tokenizer = ReplayTokenizer(TinyTemplateTokenizer())
-    first = [{"role": "tool", "content": "<output>hello</output>"}]
-    second = [{"role": "tool", "content": "<output>hello world</output>"}]
-    first_state = tokenizer.encode_messages_with_state(first, add_generation_prompt=False)
-    full_state = tokenizer.encode_messages_with_state(second, add_generation_prompt=False)
+def test_mistral_safe_messages_normalize_tool_call_ids():
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1234567890abcdef",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": "{\"command\": \"pwd\"}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1234567890abcdef", "content": "ok"},
+    ]
 
-    incremental_state = tokenizer.encode_messages_incremental(
-        second,
-        add_generation_prompt=False,
-        previous_state=first_state,
-        overlap_chars=4,
+    safe = mistral_safe_messages(messages)
+
+    assert safe[0]["content"] == ""
+    assert safe[0]["tool_calls"][0]["id"] == "tc0000000"
+    assert safe[1]["tool_call_id"] == "tc0000000"
+    assert messages[0]["tool_calls"][0]["id"] == "call_1234567890abcdef"
+
+
+def test_prefill_safety_tail_defaults_to_zero():
+    kwargs = runner_kwargs({"replay": {"cache_block_tokens": 7}}, algorithm="chunked")
+
+    assert kwargs["cache_block_tokens"] == 7
+    assert kwargs["prefill_safety_tail_tokens"] == 0
+
+
+def test_prefill_safety_tail_can_be_configured():
+    kwargs = runner_kwargs(
+        {"replay": {"cache_block_tokens": 7, "prefill_safety_tail_tokens": 4}},
+        algorithm="chunked",
     )
 
-    assert incremental_state.token_ids == full_state.token_ids
+    assert kwargs["cache_block_tokens"] == 7
+    assert kwargs["prefill_safety_tail_tokens"] == 4
 
 
-def test_live_replay_executes_command_and_uses_live_output(tmp_path):
-    backend = FakeBackend(FakeClock())
-    data = output_first_trajectory(tmp_path)
-    data["messages"][2]["extra"]["actions"] = [{"command": "printf live-output", "tool_call_id": "call_1"}]
+def test_prefill_chunk_tokens_can_be_configured():
+    kwargs = runner_kwargs(
+        {"replay": {"prefill_min_new_tokens": 512, "prefill_chunk_tokens": 128}},
+        algorithm="chunked",
+    )
 
-    runner = LiveReplayRunner(
+    assert kwargs["prefill_chunk_tokens"] == 128
+
+
+def test_stream_output_char_limit_can_be_configured():
+    kwargs = runner_kwargs(
+        {"replay": {"stream_output_char_limit": 5000}},
+        algorithm="chunked",
+    )
+
+    assert kwargs["stream_output_char_limit"] == 5000
+
+
+def test_baseline_replay_uses_trace_output_without_executing_commands(tmp_path):
+    data = make_trajectory(raw_output="trace-output")
+    backend = FakeBackend()
+    runner = make_runner(backend, data, algorithm="baseline")
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert [record["valid"] for record in records] == [True, True]
+    assert [generation["max_tokens"] for generation in backend.generations] == [5, 7]
+    assert backend.prefills == []
+    assert "trace-output" in backend.generations[1]["text"]
+    assert "SHOULD_NOT_RUN" not in backend.generations[1]["text"]
+    assert records[0]["simulated_tool_duration_s"] == 0.02
+    assert abs(records[0]["problem_e2e_s"] - 0.03) < 1e-9
+    assert "problem_e2e_s" not in records[1]
+
+
+def test_prepare_replay_scenario_copies_trace_messages(tmp_path):
+    data = make_trajectory(raw_output="trace-output")
+
+    scenario = prepare_replay_scenario(tmp_path / "case.traj.json", data)
+    data["messages"][0]["content"] = "mutated"
+    data["messages"][2]["extra"]["actions"][0]["command"] = "mutated"
+
+    assert scenario.turns[0].leading_messages[0]["content"] == "system"
+    assert scenario.turns[0].assistant["extra"]["actions"][0]["command"] == "printf SHOULD_NOT_RUN"
+
+
+def test_replay_allows_trace_without_original_ttft(tmp_path):
+    data = make_trajectory(raw_output="trace-output")
+    for message in data["messages"]:
+        model_call = (((message.get("extra") or {}).get("token_timing") or {}).get("model_call") or {})
+        model_call["ttft_s"] = None
+
+    scenario = prepare_replay_scenario(tmp_path / "case.traj.json", data)
+    records, invalid = make_runner(FakeBackend(), data).run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert scenario.terminal_invalid is None
+    assert len(scenario.turns) == 2
+    assert invalid == []
+    assert [record["valid"] for record in records] == [True, True]
+    assert records[0]["trace_ttft_s"] is None
+    assert records[0]["replay_ttft_s"] == 0.01
+
+
+def test_baseline_replay_does_not_tokenize_chunked_prefill_seed(tmp_path):
+    data = make_trajectory(raw_output="trace-output")
+    tokenizer = CountingReplayTokenizer()
+    runner = make_runner_with_tokenizer(FakeBackend(), data, tokenizer, algorithm="baseline")
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert [record["valid"] for record in records] == [True, True]
+    assert tokenizer.encode_calls == 2
+
+
+def test_chunked_replay_prefills_visible_trace_output(tmp_path):
+    raw_output = "x" * 200
+    data = make_trajectory(raw_output=raw_output)
+    backend = FakeBackend()
+    runner = make_runner(
         backend,
-        ReplayTokenizer(TinyTemplateTokenizer()),
-        data["info"]["config"],
-        prefill_min_new_tokens=999,
-        prefill_min_interval_s=0,
+        data,
+        algorithm="chunked",
+        prefill_min_new_tokens=64,
+        prefill_check_interval_s=0.001,
+        prefill_safety_tail_tokens=32,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert records[0]["prefill_submitted_count"] >= 1
+    assert records[0]["prefill_started_count"] >= 1
+    assert records[0]["prefill_count"] == records[0]["prefill_started_count"]
+    assert backend.prefills
+    assert "x" * 40 in backend.prefills[0]["text"]
+    assert backend.generations[1]["text"].startswith(backend.prefills[0]["text"])
+    assert records[0]["prefill_completed_count"] >= 1
+    assert records[0]["prefilled_prompt_suffix_tokens"] > 0
+    assert 0 < records[0]["prefilled_tool_output_tokens"] < records[0]["prefilled_prompt_suffix_tokens"]
+
+
+def test_chunked_seed_tokenization_overlaps_tool_time(tmp_path):
+    data = make_trajectory(raw_output="trace-output")
+    clock = FakeClock()
+    tokenizer = DelayedSeedTokenizer(clock, delay=0.01)
+    runner = make_runner_with_tokenizer(
+        FakeBackend(),
+        data,
+        tokenizer,
+        algorithm="chunked",
+        clock=clock,
+        prefill_min_new_tokens=10_000,
+        prefill_check_interval_s=0.001,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert abs(records[0]["problem_e2e_s"] - 0.03) < 1e-9
+
+
+def test_chunked_prefill_counts_command_tokens_after_cached_prompt(tmp_path):
+    data = make_trajectory(raw_output="")
+    data["messages"][2] = assistant_message(0, "x" * 200, completion_tokens=5)
+    data["messages"][3] = tool_message("", duration_s=0.02, events=[])
+    backend = FakeBackend()
+    tokenizer = ReplayTokenizer(CommandTemplateTokenizer())
+    runner = make_runner_with_tokenizer(
+        backend,
+        data,
+        tokenizer,
+        algorithm="chunked",
+        prefill_chunk_tokens=64,
+        prefill_check_interval_s=0.001,
+        prefill_safety_tail_tokens=16,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert records[0]["prefill_submitted_count"] >= 1
+    assert backend.prefills[0]["tokens"] - len(backend.generations[0]["text"].encode()) == 64
+    assert records[0]["prefilled_prompt_suffix_tokens"] >= 64
+    assert records[0]["prefilled_prompt_suffix_tokens"] % 64 == 0
+    assert records[0]["prefilled_tool_output_tokens"] == 0
+
+
+def test_chunked_does_not_prefill_after_tool_deadline(tmp_path):
+    data = make_trajectory(raw_output="")
+    data["messages"][2] = assistant_message(0, "x" * 200, completion_tokens=5)
+    data["messages"][3] = tool_message("", duration_s=0.02, events=[])
+    clock = FakeClock()
+    tokenizer = DelayedCommandTokenizer(clock, delay=0.03)
+    backend = FakeBackend()
+    runner = make_runner_with_tokenizer(
+        backend,
+        data,
+        tokenizer,
+        algorithm="chunked",
+        clock=clock,
+        prefill_chunk_tokens=64,
+        prefill_check_interval_s=0.001,
+        prefill_safety_tail_tokens=16,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert records[0]["prefill_submitted_count"] == 0
+    assert backend.prefills == []
+
+
+def test_chunked_does_not_submit_when_partial_tokenization_crosses_deadline(tmp_path):
+    data = make_trajectory(raw_output="")
+    data["messages"][2] = assistant_message(0, "x" * 200, completion_tokens=5)
+    data["messages"][3] = tool_message("", duration_s=0.02, events=[])
+    clock = FakeClock()
+    tokenizer = DelayedPartialPromptTokenizer(clock, delay=0.03)
+    backend = FakeBackend()
+    runner = make_runner_with_tokenizer(
+        backend,
+        data,
+        tokenizer,
+        algorithm="chunked",
+        clock=clock,
+        prefill_chunk_tokens=64,
+        prefill_check_interval_s=0.001,
+        prefill_safety_tail_tokens=16,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert records[0]["prefill_submitted_count"] == 0
+    assert backend.prefills == []
+
+
+def test_chunked_drains_command_chunks_while_tool_is_running(tmp_path):
+    data = make_trajectory(raw_output="")
+    data["messages"][2] = assistant_message(0, "x" * 300, completion_tokens=5)
+    data["messages"][3] = tool_message("", duration_s=0.2, events=[])
+    backend = FakeBackend()
+    runner = make_runner_with_tokenizer(
+        backend,
+        data,
+        ReplayTokenizer(CommandTemplateTokenizer()),
+        algorithm="chunked",
+        prefill_chunk_tokens=64,
+        prefill_check_interval_s=0.05,
+        prefill_safety_tail_tokens=16,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert records[0]["prefill_submitted_count"] >= 2
+    assert all(
+        current["tokens"] - previous["tokens"] == 64
+        for previous, current in zip(backend.prefills, backend.prefills[1:])
+    )
+
+
+def test_chunked_keeps_pending_prefill_one_chunk_ahead(tmp_path):
+    data = make_trajectory(raw_output="")
+    data["messages"][2] = assistant_message(0, "x" * 300, completion_tokens=5)
+    data["messages"][3] = tool_message("", duration_s=0.2, events=[])
+    backend = BlockingPrefillBackend()
+    runner = make_runner_with_tokenizer(
+        backend,
+        data,
+        ReplayTokenizer(CommandTemplateTokenizer()),
+        algorithm="chunked",
+        prefill_chunk_tokens=64,
+        prefill_check_interval_s=0.01,
+        prefill_safety_tail_tokens=16,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert records[0]["prefill_active_at_tool_end"] == 1
+    assert records[0]["prefill_pending_at_tool_end"] == 1
+    assert (
+        records[0]["pending_prefill_prefix_len_at_tool_end"]
+        - records[0]["active_prefill_prefix_len_at_tool_end"]
+        == 64
+    )
+
+
+def test_chunked_cache_frontier_stops_at_prompt_divergence(tmp_path):
+    data = make_trajectory(raw_output="")
+    data["messages"][2] = assistant_message(0, "x" * 200, completion_tokens=5)
+    data["messages"][3] = tool_message("", duration_s=0.02, events=[])
+    tokenizer = ReplayTokenizer(DivergingGenerationPromptTokenizer())
+    backend = FakeBackend()
+    runner = make_runner_with_tokenizer(
+        backend,
+        data,
+        tokenizer,
+        algorithm="chunked",
+        prefill_chunk_tokens=64,
+        prefill_check_interval_s=0.001,
+        prefill_safety_tail_tokens=16,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+    prior_prompt = backend.generations[0]["text"].encode()
+    first_prefill = backend.prefills[0]["text"].encode()
+    shared_prefix = next(
+        index
+        for index, (prior_token, prefill_token) in enumerate(zip(prior_prompt, first_prefill))
+        if prior_token != prefill_token
+    )
+
+    assert invalid == []
+    assert backend.prefills[0]["tokens"] - shared_prefix == 64
+
+
+def test_chunked_replay_advances_prefill_in_fixed_size_chunks(tmp_path):
+    data = make_trajectory(raw_output="x" * 240)
+    data["messages"][3]["extra"]["timestamp"] = 0.2
+    data["messages"][3]["extra"]["token_timing"]["tool_calls"][0]["duration_s"] = 0.2
+    data["messages"][3]["extra"]["token_timing"]["tool_calls"][0]["output_events"] = [
+        {"t": 0.005, "output_chars": 240}
+    ]
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="chunked",
+        prefill_min_new_tokens=64,
+        prefill_check_interval_s=0.05,
         prefill_safety_tail_tokens=0,
         cache_block_tokens=1,
     )
 
     records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
 
-    assert invalid == [{"trajectory_path": str(tmp_path / "case.traj.json"), "instance_id": "case-1", "step_index": 1, "valid": False, "skip_reason": "no_next_prompt"}]
-    assert len(records) == 1
-    record = records[0]
-    assert record["valid"] is True
-    assert record["live_command_count"] == 1
-    assert record["live_stream_output_tokens"] == len("live-output")
-    assert record["tool_output_tokens"] > 0
-    assert record["pre_end_prefill_count"] == 0
-    assert record["unprefilled_tool_output_tokens"] == record["tool_output_tokens"]
-    assert "live-output" in backend.measured_token_texts[0]
-    assert "one two" not in backend.measured_token_texts[0]
-
-
-def test_live_stream_burst_stats_show_when_output_arrives():
-    result = LiveCommandResult(
-        output="abcd",
-        returncode=0,
-        exception_info="",
-        events=[
-            LiveOutputEvent(t=0.10, text="a"),
-            LiveOutputEvent(t=0.60, text="bc"),
-            LiveOutputEvent(t=0.90, text="d"),
-        ],
-        duration_s=1.0,
+    assert invalid == []
+    assert records[0]["prefill_submitted_count"] >= 2
+    assert records[0]["prefill_started_count"] >= 2
+    assert records[0]["prefill_count"] == records[0]["prefill_started_count"]
+    assert all(
+        current["tokens"] - previous["tokens"] == 64
+        for previous, current in zip(backend.prefills, backend.prefills[1:])
     )
 
-    stats = live_stream_burst_stats([result], len)
 
-    assert stats["live_stream_output_tokens"] == 4
-    assert stats["live_stream_first_output_fraction"] == pytest.approx(0.10)
-    assert stats["live_stream_last_output_fraction"] == pytest.approx(0.90)
-    assert stats["live_stream_tokens_before_75pct"] == 3
+def test_chunked_replay_reuses_prefill_seed_for_next_prompt(tmp_path):
+    data = make_trajectory(raw_output="trace-output")
+    tokenizer = CountingReplayTokenizer()
+    runner = make_runner_with_tokenizer(
+        FakeBackend(),
+        data,
+        tokenizer,
+        algorithm="chunked",
+        prefill_min_new_tokens=10_000,
+        prefill_check_interval_s=0.001,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert [record["valid"] for record in records] == [True, True]
+    assert tokenizer.encode_calls == 5
+
+
+def test_stream_output_char_limit_avoids_retokenizing_after_limit(tmp_path):
+    data = make_trajectory(raw_output="x" * 200)
+    data["info"]["config"]["replay"] = {"stream_output_char_limit": 80}
+    data["messages"][3]["extra"]["timestamp"] = 0.12
+    data["messages"][3]["extra"]["token_timing"]["tool_calls"][0]["duration_s"] = 0.12
+    data["messages"][3]["extra"]["token_timing"]["tool_calls"][0]["output_events"] = [
+        {"t": 0.005, "output_chars": 120},
+        {"t": 0.055, "output_chars": 200},
+    ]
+    tokenizer = CountingReplayTokenizer()
+    runner = make_runner_with_tokenizer(
+        FakeBackend(),
+        data,
+        tokenizer,
+        algorithm="chunked",
+        prefill_min_new_tokens=64,
+        prefill_check_interval_s=0.05,
+        stream_output_char_limit=80,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert [record["valid"] for record in records] == [True, True]
+    assert tokenizer.encode_calls == 5
+
+
+def test_chunked_replay_without_next_assistant_does_not_prefill_final_tool(tmp_path):
+    data = make_trajectory(raw_output="x" * 200)
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="chunked",
+        prefill_min_new_tokens=64,
+        prefill_check_interval_s=0.001,
+        cache_block_tokens=1,
+    )
+
+    records, _ = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert records[-1]["prefill_count"] == 0
+
+
+def test_scheduled_checks_are_on_interval_after_output_events():
+    events = [{"t": 0.011, "output_chars": 10}, {"t": 0.037, "output_chars": 20}]
+
+    assert list(iter_visible_checkpoints(events, duration_s=0.08, output_chars=20, interval_s=0.025)) == [
+        (0.025, 10),
+        (0.05, 20),
+        (0.075, 20),
+    ]
+
+
+def test_scheduled_checks_continue_without_output_events():
+    assert list(iter_visible_checkpoints([], duration_s=0.16, output_chars=0, interval_s=0.05)) == [
+        (0.05, 0),
+        (0.1, 0),
+        (0.15, 0),
+    ]
+
+
+def test_event_time_checkpoints_include_visible_chars():
+    events = [{"t": 0.011, "output_chars": 10}, {"t": 0.037, "output_chars": 20}]
+
+    assert list(iter_visible_checkpoints(events, duration_s=0.08, output_chars=20, interval_s=0)) == [
+        (0.011, 10),
+        (0.037, 20),
+    ]
 
 
 def test_record_output_keeps_only_core_metrics():
     record = {
         "trajectory_path": "case.traj.json",
         "instance_id": "case",
+        "algorithm": "baseline",
         "step_index": 0,
         "valid": True,
         "skip_reason": "",
-        "baseline_ttft_s": 0.2,
-        "stream_prefill_ttft_s": 0.3,
+        "trace_ttft_s": 0.2,
+        "replay_ttft_s": 0.3,
         "internal_debug_counter": 100,
     }
 
     compact = record_for_output(record)
 
-    assert "baseline_ttft_s" in compact
+    assert "trace_ttft_s" in compact
     assert "internal_debug_counter" not in compact
 
 
@@ -312,117 +797,6 @@ def test_usage_only_chunk_is_not_generated_payload():
     assert completion_chunk_has_generated_payload(chunk) is False
 
 
-def test_live_replay_prefills_running_output_when_observation_is_output_first(tmp_path):
-    backend = FakeBackend(FakeClock())
-    data = output_first_config(tmp_path, "printf '%0400d' 0; sleep 0.2")
-
-    runner = LiveReplayRunner(
-        backend,
-        ReplayTokenizer(TinyTemplateTokenizer()),
-        data["info"]["config"],
-        prefill_min_new_tokens=1,
-        prefill_min_interval_s=0,
-        prefill_safety_tail_tokens=32,
-        cache_block_tokens=1,
-    )
-
-    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
-
-    assert invalid == [{"trajectory_path": str(tmp_path / "case.traj.json"), "instance_id": "case-1", "step_index": 1, "valid": False, "skip_reason": "no_next_prompt"}]
-    assert len(records) == 1
-    record = records[0]
-    assert record["valid"] is True
-    assert record["pre_end_prefill_count"] >= 1
-    assert record["command_time_prefill_tool_output_tokens"] > 0
-    assert record["unprefilled_tool_output_tokens"] < record["tool_output_tokens"]
-    tool_output_prefills = [text for label, text in backend.prefill_texts if label == "tool_output"]
-    assert tool_output_prefills
-    assert all("<output>\n" in text for text in tool_output_prefills)
-    assert all("</output>" not in text for text in tool_output_prefills)
-    assert all("<returncode>" not in text for text in tool_output_prefills)
-
-
-def test_live_stream_prefill_does_not_wait_after_final_command(tmp_path):
-    backend = SlowBackend(FakeClock(), delay=0.2)
-    data = output_first_config(tmp_path, "printf '%0400d' 0; sleep 0.05")
-
-    runner = LiveReplayRunner(
-        backend,
-        ReplayTokenizer(TinyTemplateTokenizer()),
-        data["info"]["config"],
-        prefill_min_new_tokens=1,
-        prefill_min_interval_s=0,
-        prefill_safety_tail_tokens=32,
-        cache_block_tokens=1,
-    )
-
-    records, _ = runner.run_trajectory(tmp_path / "case.traj.json", data)
-
-    record = records[0]
-    assert record["valid"] is True
-    assert record["command_time_prefill_tool_output_tokens"] == 0
-    assert record["unprefilled_tool_output_tokens"] > 0
-    assert record["live_command_duration_s"] < 0.2
-    assert record["prefill_active_at_tool_end"] == 1
-    assert record["active_prefill_cancel_requested_at_tool_end"] == 1
-    assert backend.cancelled_prefills
-
-
-def test_live_stream_tokenization_does_not_block_command_reader(tmp_path):
-    backend = FakeBackend(FakeClock())
-    data = output_first_config(tmp_path, "printf '%0400d' 0")
-
-    runner = LiveReplayRunner(
-        backend,
-        SlowTokenizer(delay=0.2),
-        data["info"]["config"],
-        prefill_min_new_tokens=1,
-        prefill_min_interval_s=0,
-        prefill_safety_tail_tokens=32,
-        cache_block_tokens=1,
-    )
-
-    records, _ = runner.run_trajectory(tmp_path / "case.traj.json", data)
-
-    record = records[0]
-    assert record["valid"] is True
-    assert record["live_command_duration_s"] < 0.2
-    assert record["live_stream_output_tokens"] == 400
-
-
-def test_live_replay_leaves_final_command_tail_for_ttft_request(tmp_path):
-    backend = FakeBackend(FakeClock())
-    data = output_first_config(tmp_path, "printf '%01500d' 0")
-
-    runner = LiveReplayRunner(
-        backend,
-        ReplayTokenizer(TinyTemplateTokenizer()),
-        data["info"]["config"],
-        prefill_min_new_tokens=1000,
-        prefill_min_interval_s=0,
-        prefill_safety_tail_tokens=32,
-        cache_block_tokens=1,
-    )
-
-    records, _ = runner.run_trajectory(tmp_path / "case.traj.json", data)
-
-    record = records[0]
-    assert record["valid"] is True
-    assert record["unprefilled_tool_output_tokens"] > 0
-
-
-def test_capacity_skip_uses_live_seed_prompt(tmp_path):
-    backend = FakeBackend(FakeClock())
-    data = output_first_trajectory(tmp_path)
-    runner = LiveReplayRunner(backend, ReplayTokenizer(TinyTemplateTokenizer()), data["info"]["config"], max_context_tokens=3)
-
-    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
-
-    assert invalid == []
-    assert records[0]["valid"] is False
-    assert records[0]["skip_reason"] == "skipped_capacity"
-
-
 def test_collect_trajectory_files_accepts_file_and_directory(tmp_path):
     first = tmp_path / "a.traj.json"
     second = tmp_path / "nested" / "b.traj.json"
@@ -434,66 +808,23 @@ def test_collect_trajectory_files_accepts_file_and_directory(tmp_path):
     assert collect_trajectory_files(tmp_path) == [first, second]
 
 
-def test_replay_cli_writes_outputs_without_prefill_hook(tmp_path, monkeypatch):
+def test_replay_cli_writes_outputs(tmp_path, monkeypatch):
     trajectory_path = tmp_path / "case.traj.json"
-    data = output_first_trajectory(tmp_path)
+    data = make_trajectory(raw_output="cli-output")
     data["info"]["config"]["agent"]["tokenizer_path"] = "fake-tokenizer"
     trajectory_path.write_text(json.dumps(data))
     output_dir = tmp_path / "out"
-    monkeypatch.setattr("minisweagent.run.replay.load_tokenizer", lambda *args, **kwargs: TinyTemplateTokenizer())
+    backend = FakeBackend()
 
-    main(path=trajectory_path, output=output_dir, config_spec=[])
+    monkeypatch.setattr("minisweagent.run.replay.load_tokenizer", lambda *args, **kwargs: TinyTemplateTokenizer())
+    monkeypatch.setattr("minisweagent.run.replay.backend_from_config", lambda config: backend)
+
+    main(path=trajectory_path, output=output_dir, algorithm="baseline", limit=None, config_spec=[])
 
     results = (output_dir / "replay_results.jsonl").read_text().splitlines()
     invalid = (output_dir / "invalid_steps.jsonl").read_text().splitlines()
     summary = json.loads((output_dir / "summary.json").read_text())
 
-    assert results
-    assert invalid
-    assert summary["valid"] == 0
-    assert summary["skip_reasons"]["missing_prefill_url"] == 2
-
-
-def test_replay_cli_flushes_and_continues_after_trajectory_failure(tmp_path, monkeypatch):
-    first = tmp_path / "a.traj.json"
-    second = tmp_path / "b.traj.json"
-    data = output_first_trajectory(tmp_path)
-    data["info"]["config"]["agent"]["tokenizer_path"] = "fake-tokenizer"
-    first.write_text(json.dumps(data))
-    second.write_text(json.dumps(data))
-    output_dir = tmp_path / "out"
-
-    def fake_run_trajectory(self, path, data):
-        if path == first:
-            raise RuntimeError("container start failed")
-        return (
-            [
-                {
-                    "trajectory_path": str(path),
-                    "instance_id": "case-1",
-                    "step_index": 0,
-                    "valid": True,
-                    "skip_reason": "",
-                    "baseline_ttft_s": 0.2,
-                    "stream_prefill_ttft_s": 0.1,
-                    "delta_ttft_s": 0.1,
-                }
-            ],
-            [],
-        )
-
-    monkeypatch.setattr("minisweagent.run.replay.load_tokenizer", lambda *args, **kwargs: TinyTemplateTokenizer())
-    monkeypatch.setattr(LiveReplayRunner, "run_trajectory", fake_run_trajectory)
-
-    main(path=tmp_path, output=output_dir, config_spec=[])
-
-    results = (output_dir / "replay_results.jsonl").read_text().splitlines()
-    invalid = (output_dir / "invalid_steps.jsonl").read_text().splitlines()
-    summary = json.loads((output_dir / "summary.json").read_text())
-
-    assert len(results) == 1
-    assert len(invalid) == 1
-    assert summary["total"] == 2
-    assert summary["valid"] == 1
-    assert summary["skipped"] == 1
-    assert summary["skip_reasons"]["trajectory_failed:RuntimeError"] == 1
+    assert len(results) == 2
+    assert invalid == []
+    assert summary["valid"] == 2
