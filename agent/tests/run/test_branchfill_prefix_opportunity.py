@@ -4,7 +4,7 @@ from typing import Any
 
 from typer.testing import CliRunner
 
-from minisweagent.run.branchfill_prefix_opportunity import analyze_trajectory, app, run_analysis
+from minisweagent.run.extra.branchfill_prefix_opportunity import analyze_trajectory, app, run_analysis
 
 
 class ByteTokenizer:
