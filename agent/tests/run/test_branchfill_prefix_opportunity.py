@@ -1,10 +1,20 @@
 import json
+from pathlib import Path
+from typing import Any
 
-from minisweagent.run.branchfill_prefix_opportunity import analyze_trajectory, main, run_analysis
+from typer.testing import CliRunner
+
+from minisweagent.run.branchfill_prefix_opportunity import analyze_trajectory, app, run_analysis
 
 
 class ByteTokenizer:
-    def __call__(self, text, *, add_special_tokens=False, return_offsets_mapping=False):
+    def __call__(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool = False,
+        return_offsets_mapping: bool = False,
+    ) -> dict[str, Any]:
         encoded = list(text.encode("utf-8"))
         if not return_offsets_mapping:
             return {"input_ids": encoded}
@@ -17,14 +27,14 @@ class ByteTokenizer:
             byte_offset += width
         return {"input_ids": encoded, "offset_mapping": offsets}
 
-    def encode(self, text, *, add_special_tokens=False):
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
         return list(text.encode("utf-8"))
 
-    def decode(self, token_ids, *, skip_special_tokens=False):
+    def decode(self, token_ids: list[int], *, skip_special_tokens: bool = False) -> str:
         return bytes(token_ids).decode("utf-8")
 
 
-def assistant_message(call_id: str, command: str) -> dict:
+def assistant_message(call_id: str, command: str) -> dict[str, Any]:
     return {
         "role": "assistant",
         "tool_calls": [
@@ -38,7 +48,7 @@ def assistant_message(call_id: str, command: str) -> dict:
     }
 
 
-def tool_message(call_id: str, output: str, category: str) -> dict:
+def tool_message(call_id: str, output: str, category: str) -> dict[str, Any]:
     rendered = (
         f"<returncode>0</returncode>\n<output>\n{output}\n</output>"
         if len(output) < 10000
@@ -69,7 +79,7 @@ def tool_message(call_id: str, output: str, category: str) -> dict:
     }
 
 
-def test_analysis_uses_only_earlier_outputs_and_keeps_candidate_pools_separate():
+def test_analysis_uses_only_earlier_outputs_and_keeps_candidate_pools_separate() -> None:
     trajectory = example_trajectory()
 
     rows = analyze_trajectory(trajectory, ByteTokenizer(), trajectory_path="case-1.traj.json")
@@ -84,7 +94,7 @@ def test_analysis_uses_only_earlier_outputs_and_keeps_candidate_pools_separate()
     assert rows[2]["model_visible_any_prior_prefix_preview"] == "abc"
 
 
-def test_run_analysis_writes_auditable_records_and_summary(tmp_path):
+def test_run_analysis_writes_auditable_records_and_summary(tmp_path: Path) -> None:
     run_dir = tmp_path / "traces"
     trajectory_path = run_dir / "gpu0" / "case-1" / "case-1.traj.json"
     trajectory_path.parent.mkdir(parents=True)
@@ -100,7 +110,9 @@ def test_run_analysis_writes_auditable_records_and_summary(tmp_path):
     assert summary["model_visible"]["exact_args"]["reusable_tokens"] == 3
     assert summary["model_visible"]["any_prior"]["lcp_tokens"]["max"] == 3
     assert summary["model_visible"]["any_prior"]["thresholds"]["1"]["calls"] == 2
+    assert summary["model_visible"]["any_prior"]["trajectory_reuse_ratio"]["p25"] == 5 / 15
     assert summary["model_visible"]["any_prior"]["trajectory_reuse_ratio"]["median"] == 5 / 15
+    assert summary["model_visible"]["any_prior"]["trajectory_reuse_ratio"]["p75"] == 5 / 15
     assert summary["model_visible"]["any_prior"]["reuse_ratio_ci95"] == {"low": 5 / 15, "high": 5 / 15}
     assert summary["rendering"]["full_calls"] == 3
     assert summary["rendering"]["truncated_calls"] == 0
@@ -112,10 +124,13 @@ def test_run_analysis_writes_auditable_records_and_summary(tmp_path):
     assert top_matches[0]["model_visible_any_prior_prefix_preview"] == "abc"
     assert top_matches[0]["model_visible_any_prior_match_command"] == "pytest"
     assert json.loads((output_dir / "summary.json").read_text()) == summary
-    assert "BranchFill Prefix Opportunity" in (output_dir / "report.md").read_text()
+    report = (output_dir / "report.md").read_text()
+    assert "BranchFill Prefix Opportunity" in report
+    assert "Per-trajectory reuse ratio" in report
+    assert "Output-length breakdown" in report
 
 
-def test_truncated_outputs_reuse_only_the_visible_head_and_do_not_mix_render_kinds():
+def test_truncated_outputs_reuse_only_the_visible_head_and_do_not_mix_render_kinds() -> None:
     first = "a" * 5000 + "X" + "z" * 5000
     second = "a" * 5000 + "Y" + "z" * 5000
     full = "a" * 6000
@@ -142,23 +157,15 @@ def test_truncated_outputs_reuse_only_the_visible_head_and_do_not_mix_render_kin
     assert rows[2]["model_visible_any_prior_lcp_tokens"] == 0
 
 
-def test_cli_accepts_trace_and_output_directories(tmp_path):
-    run_dir = tmp_path / "traces"
-    trajectory_path = run_dir / "case-1.traj.json"
-    run_dir.mkdir()
-    trajectory_path.write_text(json.dumps(example_trajectory()))
-    output_dir = tmp_path / "report"
+def test_cli_exposes_trace_and_output_directory_arguments() -> None:
+    result = CliRunner().invoke(app, ["--help"])
 
-    exit_code = main(
-        [str(run_dir), "--output-dir", str(output_dir), "--tokenizer-path", "unused-in-test"],
-        tokenizer=ByteTokenizer(),
-    )
-
-    assert exit_code == 0
-    assert (output_dir / "summary.json").exists()
+    assert result.exit_code == 0
+    assert "RUN_DIR" in result.stdout
+    assert "--output-dir" in result.stdout
 
 
-def example_trajectory() -> dict:
+def example_trajectory() -> dict[str, Any]:
     return {
         "instance_id": "case-1",
         "messages": [

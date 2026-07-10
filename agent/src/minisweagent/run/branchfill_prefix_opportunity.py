@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import random
 import statistics
@@ -11,12 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import typer
+from jinja2 import Template
+
 from minisweagent.run.benchmarks.utils.token_timing import pipeline_category
 
 Record = dict[str, Any]
 PAYLOAD_BOUNDARY = "<output>\n"
 TRUNCATED_PAYLOAD_BOUNDARY = "<output_head>\n"
 TRUNCATED_TAIL_BOUNDARY = "<output_tail>\n"
+app = typer.Typer(add_completion=False)
 
 
 @dataclass(frozen=True)
@@ -28,7 +31,6 @@ class ToolOutput:
     command_category: str
     exact_args_key: str
     raw_output: str
-    rendered_prefix: str
     raw_tokens: list[int]
     rendered_prefix_tokens: list[int]
     rendered_payload_tokens: int
@@ -37,30 +39,25 @@ class ToolOutput:
     message_index: int
 
 
-def main(argv: list[str] | None = None, *, tokenizer: Any = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_dir", type=Path)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--tokenizer-path")
-    parser.add_argument(
-        "--allow-tokenizer-download",
-        action="store_true",
-        help="Allow loading tokenizer files that are not already available locally.",
-    )
-    args = parser.parse_args(argv)
-
-    trajectories = sorted(args.run_dir.glob("**/*.traj.json"))
+@app.command()
+def main(
+    run_dir: Path,
+    output_dir: Path = typer.Option(..., "--output-dir"),
+    tokenizer_path: str | None = typer.Option(None, "--tokenizer-path"),
+    allow_tokenizer_download: bool = typer.Option(False, "--allow-tokenizer-download"),
+) -> None:
+    """Analyze exact causal tool-output prefix reuse in saved trajectories."""
+    trajectories = sorted(run_dir.glob("**/*.traj.json"))
     if not trajectories:
-        parser.error(f"No trajectory files found below {args.run_dir}")
+        raise typer.BadParameter(f"No trajectory files found below {run_dir}")
 
-    if tokenizer is None:
-        tokenizer_path = args.tokenizer_path or tokenizer_path_from_trajectory(trajectories[0])
-        if not tokenizer_path:
-            parser.error("No tokenizer path was supplied or recorded in the trajectories")
-        tokenizer = load_tokenizer(tokenizer_path, local_files_only=not args.allow_tokenizer_download)
+    tokenizer_path = tokenizer_path or tokenizer_path_from_trajectory(trajectories[0])
+    if not tokenizer_path:
+        raise typer.BadParameter("No tokenizer path was supplied or recorded in the trajectories")
+    tokenizer = load_tokenizer(tokenizer_path, local_files_only=not allow_tokenizer_download)
 
-    summary = run_analysis(args.run_dir, args.output_dir, tokenizer)
-    print(
+    summary = run_analysis(run_dir, output_dir, tokenizer)
+    typer.echo(
         json.dumps(
             {
                 "trajectory_count": summary["trajectory_count"],
@@ -72,12 +69,11 @@ def main(argv: list[str] | None = None, *, tokenizer: Any = None) -> int:
                     }
                     for pool in ("any_prior", "same_category", "exact_args")
                 },
-                "report": str(args.output_dir / "report.md"),
+                "report": str(output_dir / "report.md"),
             },
             indent=2,
         )
     )
-    return 0
 
 
 def run_analysis(run_dir: Path, output_dir: Path, tokenizer: Any) -> Record:
@@ -257,7 +253,6 @@ def tool_output_from_message(
         command_category=str(metric.get("command_category") or pipeline_category(command) or tool_name),
         exact_args_key=f"{tool_name}:{json.dumps(exact_args, sort_keys=True, separators=(',', ':'))}",
         raw_output=raw_output,
-        rendered_prefix=rendered_prefix,
         raw_tokens=encode(tokenizer, raw_output),
         rendered_prefix_tokens=encode_payload(tokenizer, rendered_prefix, render_kind),
         rendered_payload_tokens=rendered_payload_tokens,
@@ -297,18 +292,12 @@ def encode_payload(tokenizer: Any, payload: str, render_kind: str) -> list[int]:
     }
     boundary = boundaries[render_kind]
     text = boundary + payload
-    try:
-        encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
-        return [
-            token_id
-            for token_id, (_, end) in zip(encoded["input_ids"], encoded["offset_mapping"])
-            if end > len(boundary)
-        ]
-    except (KeyError, TypeError, ValueError, NotImplementedError):
-        boundary_tokens = encode(tokenizer, boundary)
-        full_tokens = encode(tokenizer, text)
-        common = longest_common_prefix(boundary_tokens, full_tokens)
-        return full_tokens[common:]
+    encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    return [
+        token_id
+        for token_id, (_, end) in zip(encoded["input_ids"], encoded["offset_mapping"])
+        if end > len(boundary)
+    ]
 
 
 def encode(tokenizer: Any, text: str) -> list[int]:
@@ -316,10 +305,7 @@ def encode(tokenizer: Any, text: str) -> list[int]:
 
 
 def decode(tokenizer: Any, token_ids: list[int]) -> str:
-    try:
-        return str(tokenizer.decode(token_ids, skip_special_tokens=False))
-    except (AttributeError, TypeError, ValueError):
-        return ""
+    return str(tokenizer.decode(token_ids, skip_special_tokens=False))
 
 
 def candidate_pools(call: ToolOutput, history: list[ToolOutput]) -> dict[str, list[ToolOutput]]:
@@ -371,10 +357,7 @@ def longest_common_prefix(left: list[int], right: list[int]) -> int:
 
 
 def integer_or_none(value: Any) -> int | None:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
+    return int(value) if value is not None else None
 
 
 def write_jsonl(path: Path, rows: list[Record]) -> None:
@@ -582,7 +565,9 @@ def numeric_summary(values: list[float | int]) -> Record:
             "min": None,
             "max": None,
             "mean": None,
+            "p25": None,
             "median": None,
+            "p75": None,
             "p90": None,
             "p95": None,
             "p99": None,
@@ -593,7 +578,9 @@ def numeric_summary(values: list[float | int]) -> Record:
         "min": ordered[0],
         "max": ordered[-1],
         "mean": statistics.fmean(ordered),
+        "p25": percentile(ordered, 25),
         "median": statistics.median(ordered),
+        "p75": percentile(ordered, 75),
         "p90": percentile(ordered, 90),
         "p95": percentile(ordered, 95),
         "p99": percentile(ordered, 99),
@@ -608,105 +595,83 @@ def percentile(ordered: list[float | int], percentage: float) -> float | int:
     return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
 
+REPORT_TEMPLATE = """# BranchFill Prefix Opportunity
+
+- Trajectories: {{ summary.trajectory_count }}
+- Tool calls: {{ summary.tool_call_count }}
+
+## Findings
+
+- The causal any-prior oracle reuses {{ ratio(any_prior.reuse_ratio) }} of model-visible payload tokens (trajectory-bootstrap 95% CI {{ ratio(any_prior.reuse_ratio_ci95.low) }}–{{ ratio(any_prior.reuse_ratio_ci95.high) }}).
+- Restricting candidates to the same command category retains {{ ratio(divide(same_category.reusable_tokens, any_prior.reusable_tokens)) }} of those oracle-reusable tokens.
+- Exact-argument history exists for {{ exact_args.eligible_calls }} calls ({{ ratio(divide(exact_args.eligible_calls, summary.tool_call_count)) }} of all calls). Within those eligible calls it reuses {{ ratio(exact_args.eligible_reuse_ratio) }} of payload tokens, or {{ ratio(exact_args.reuse_ratio) }} globally.
+- Among exact-argument-eligible calls, {{ exact_32.calls }} ({{ ratio(exact_32.eligible_call_rate) }}) reach at least 32 exact prefix tokens.
+
+## Oracle reuse
+
+| View | Candidate pool | Output tokens | Reusable tokens | Reuse ratio |
+|---|---:|---:|---:|---:|
+{% for view in views %}{% for pool in pools %}{% set metric = summary[view][pool] %}| {{ view }} | {{ pool }} | {{ metric.output_tokens }} | {{ metric.reusable_tokens }} | {{ ratio(metric.reuse_ratio) }} |
+{% endfor %}{% endfor %}
+## Model-visible LCP coverage
+
+| Candidate pool | Eligible calls | Positive LCP calls | Median LCP | P90 LCP | P99 LCP |
+|---|---:|---:|---:|---:|---:|
+{% for pool in pools %}{% set metric = summary.model_visible[pool] %}| {{ pool }} | {{ metric.eligible_calls }} | {{ metric.positive_lcp_calls }} | {{ number(metric.lcp_tokens.median) }} | {{ number(metric.lcp_tokens.p90) }} | {{ number(metric.lcp_tokens.p99) }} |
+{% endfor %}
+## Per-trajectory reuse ratio
+
+| Candidate pool | P25 | Median | P75 | P90 |
+|---|---:|---:|---:|---:|
+{% for pool in pools %}{% set distribution = summary.model_visible[pool].trajectory_reuse_ratio %}| {{ pool }} | {{ ratio(distribution.p25) }} | {{ ratio(distribution.median) }} | {{ ratio(distribution.p75) }} | {{ ratio(distribution.p90) }} |
+{% endfor %}
+## Output-length breakdown
+
+| Output tokens | Calls | Output tokens | Any-prior reusable tokens | Reuse ratio |
+|---|---:|---:|---:|---:|
+{% for label, metric in summary.output_length_buckets.items() %}| {{ label }} | {{ metric.tool_call_count }} | {{ metric.output_tokens }} | {{ metric.reusable_tokens }} | {{ ratio(metric.reuse_ratio) }} |
+{% endfor %}
+## Rendering
+
+- Full outputs: {{ summary.rendering.full_calls }} calls / {{ summary.rendering.full_output_tokens }} payload tokens
+- Truncated outputs: {{ summary.rendering.truncated_calls }} calls / {{ summary.rendering.truncated_output_tokens }} visible head-and-tail payload tokens
+- Truncated-output reuse is conservatively capped at the visible 5,000-character head.
+
+## Largest command categories
+
+| Category | Calls | Output tokens | Any-prior reuse | Exact-args reuse |
+|---|---:|---:|---:|---:|
+{% for category, category_summary in categories %}{% set category_any = category_summary.model_visible.any_prior %}{% set category_exact = category_summary.model_visible.exact_args %}| `{{ category }}` | {{ category_summary.tool_call_count }} | {{ category_any.output_tokens }} | {{ ratio(category_any.reuse_ratio) }} | {{ ratio(category_exact.reuse_ratio) }} |
+{% endfor %}
+## Method
+
+For each tool call, candidates are restricted to completed earlier calls in the same trajectory. The oracle chooses the candidate with the longest exact target-tokenizer prefix. No text normalization or future/cross-trajectory output is used. Candidate pools are all prior calls, the same recorded command category, and exact tool arguments. Calls without a candidate remain in the denominator.
+
+The model-visible metric requires the candidate and current output to use the same full/truncated rendering form. This preserves the exact formatter boundary and token positions needed for KV reuse. The raw metric compares every causal candidate regardless of rendering form.
+
+`per_call.jsonl` contains every comparison result. `top_matches.json` contains the 50 largest model-visible any-prior matches for manual inspection.
+"""
+
+
 def markdown_report(summary: Record) -> str:
-    any_prior = summary["model_visible"]["any_prior"]
-    same_category = summary["model_visible"]["same_category"]
-    exact_args = summary["model_visible"]["exact_args"]
-    exact_32 = exact_args["thresholds"]["32"]
-    lines = [
-        "# BranchFill Prefix Opportunity",
-        "",
-        f"- Trajectories: {summary['trajectory_count']}",
-        f"- Tool calls: {summary['tool_call_count']}",
-        "",
-        "## Findings",
-        "",
-        f"- The causal any-prior oracle reuses {format_ratio(any_prior['reuse_ratio'])} of model-visible payload "
-        f"tokens (trajectory-bootstrap 95% CI {format_ratio(any_prior['reuse_ratio_ci95']['low'])}–"
-        f"{format_ratio(any_prior['reuse_ratio_ci95']['high'])}).",
-        f"- Restricting candidates to the same command category retains "
-        f"{format_ratio(safe_ratio(same_category['reusable_tokens'], any_prior['reusable_tokens']))} of those "
-        "oracle-reusable tokens.",
-        f"- Exact-argument history exists for {exact_args['eligible_calls']} calls "
-        f"({format_ratio(safe_ratio(exact_args['eligible_calls'], summary['tool_call_count']))} of all calls). "
-        f"Within those eligible calls it reuses {format_ratio(exact_args['eligible_reuse_ratio'])} of payload tokens, "
-        f"or {format_ratio(exact_args['reuse_ratio'])} globally.",
-        f"- Among exact-argument-eligible calls, {exact_32['calls']} "
-        f"({format_ratio(exact_32['eligible_call_rate'])}) reach at least 32 exact prefix tokens.",
-        "",
-        "## Oracle reuse",
-        "",
-        "| View | Candidate pool | Output tokens | Reusable tokens | Reuse ratio |",
-        "|---|---:|---:|---:|---:|",
-    ]
-    for view in ("model_visible", "raw"):
-        for pool in ("any_prior", "same_category", "exact_args"):
-            metric = summary[view][pool]
-            ratio = metric["reuse_ratio"]
-            ratio_text = f"{ratio:.2%}" if ratio is not None else "n/a"
-            lines.append(
-                f"| {view} | {pool} | {metric['output_tokens']} | {metric['reusable_tokens']} | {ratio_text} |"
-            )
-    rendering = summary["rendering"]
-    lines.extend(
-        [
-            "",
-            "## Model-visible LCP coverage",
-            "",
-            "| Candidate pool | Eligible calls | Positive LCP calls | Median LCP | P90 LCP | P99 LCP |",
-            "|---|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for pool in ("any_prior", "same_category", "exact_args"):
-        metric = summary["model_visible"][pool]
-        lcp = metric["lcp_tokens"]
-        lines.append(
-            f"| {pool} | {metric['eligible_calls']} | {metric['positive_lcp_calls']} | "
-            f"{format_number(lcp['median'])} | {format_number(lcp['p90'])} | {format_number(lcp['p99'])} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## Rendering",
-            "",
-            f"- Full outputs: {rendering['full_calls']} calls / {rendering['full_output_tokens']} payload tokens",
-            f"- Truncated outputs: {rendering['truncated_calls']} calls / "
-            f"{rendering['truncated_output_tokens']} visible head-and-tail payload tokens",
-            "- Truncated-output reuse is conservatively capped at the visible 5,000-character head.",
-            "",
-            "## Largest command categories",
-            "",
-            "| Category | Calls | Output tokens | Any-prior reuse | Exact-args reuse |",
-            "|---|---:|---:|---:|---:|",
-        ]
-    )
     categories = sorted(
         summary["command_categories"].items(),
         key=lambda item: item[1]["model_visible"]["any_prior"]["output_tokens"],
         reverse=True,
     )[:20]
-    for category, category_summary in categories:
-        any_prior = category_summary["model_visible"]["any_prior"]
-        exact_args = category_summary["model_visible"]["exact_args"]
-        lines.append(
-            f"| `{category}` | {category_summary['tool_call_count']} | {any_prior['output_tokens']} | "
-            f"{format_ratio(any_prior['reuse_ratio'])} | {format_ratio(exact_args['reuse_ratio'])} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## Method",
-            "",
-            "For each tool call, candidates are restricted to completed earlier calls in the same trajectory. "
-            "The oracle chooses the candidate with the longest exact target-tokenizer prefix. No text normalization "
-            "or future/cross-trajectory output is used. Candidate pools are all prior calls, the same recorded command "
-            "category, and exact tool arguments. Calls without a candidate remain in the denominator.",
-            "",
-            "`per_call.jsonl` contains every comparison result. `top_matches.json` contains the 50 largest "
-            "model-visible any-prior matches for manual inspection.",
-        ]
+    return Template(REPORT_TEMPLATE).render(
+        summary=summary,
+        any_prior=summary["model_visible"]["any_prior"],
+        same_category=summary["model_visible"]["same_category"],
+        exact_args=summary["model_visible"]["exact_args"],
+        exact_32=summary["model_visible"]["exact_args"]["thresholds"]["32"],
+        views=("model_visible", "raw"),
+        pools=("any_prior", "same_category", "exact_args"),
+        categories=categories,
+        ratio=format_ratio,
+        divide=safe_ratio,
+        number=format_number,
     )
-    return "\n".join(lines) + "\n"
 
 
 def format_ratio(value: float | None) -> str:
@@ -724,4 +689,4 @@ def format_number(value: float | int | None) -> str:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    app()
