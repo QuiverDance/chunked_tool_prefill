@@ -22,11 +22,8 @@ from rich.console import Console
 from minisweagent.config import get_config_from_spec
 from minisweagent.models.utils.actions_toolcall import BASH_TOOL, format_toolcall_observation_messages
 from minisweagent.run.benchmarks.utils.token_timing import load_tokenizer
-from minisweagent.run.candidate_prefill import (
-    CandidatePrefillPlan,
-    HistoricalToolCall,
-    select_similar_candidates,
-)
+from minisweagent.run.candidate_prefill import HistoricalToolCall
+from minisweagent.run.candidate_replay import CandidateToolPrefillPhase
 from minisweagent.run.replay_backend import HttpReplayBackend
 from minisweagent.run.replay_messages import api_messages, tokenizer_safe_messages
 from minisweagent.run.replay_metrics import record_for_output, summarize
@@ -53,22 +50,6 @@ DEFAULT_CANDIDATE_TOP_K = 4
 DEFAULT_TIME_SCALE = 1.0
 
 
-def candidate_prefill_stats() -> dict[str, int]:
-    return {
-        "candidate_selected_count": 0,
-        "candidate_skipped_capacity_count": 0,
-        "candidate_submitted_count": 0,
-        "candidate_completed_count": 0,
-        "candidate_shared_prefix_tokens": 0,
-        "candidate_verified_prefix_tokens": 0,
-        "candidate_verified_tool_output_tokens": 0,
-        "candidate_pruned_count": 0,
-        "candidate_surviving_count": 0,
-        "candidate_fallback_to_chunked": 0,
-        "candidate_cancelled_count": 0,
-    }
-
-
 @dataclass(frozen=True)
 class TraceToolCall:
     output: dict[str, Any]
@@ -91,19 +72,6 @@ class ToolPrefillSeed:
 class ToolPhaseResult:
     stats: dict[str, Any]
     prefill_seed: ToolPrefillSeed | None
-
-
-@dataclass(frozen=True)
-class PreparedCandidatePrefill:
-    candidates: tuple[HistoricalToolCall, ...]
-    plan: CandidatePrefillPlan
-    skipped_capacity_count: int
-
-
-@dataclass
-class CandidatePrefillRequests:
-    request_ids_by_candidate: dict[int, str]
-    token_ids_by_request: dict[str, list[int]]
 
 
 @dataclass(frozen=True)
@@ -805,267 +773,29 @@ class TraceReplayRunner:
         total_duration: float,
     ) -> ToolPhaseResult:
         phase_start = self.now()
-        stats.update(candidate_prefill_stats())
         prefill_seed = self.prefill_seed(history_after_assistant, cached_prompt_ids=cached_prompt_ids)
-        if not actions:
-            self.sleep_until(phase_start, total_duration)
-            return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
-
-        prepared = self.prepare_candidate_prefill(
+        candidate_stats = CandidateToolPrefillPhase(self).run(
+            phase_start=phase_start,
+            total_duration=total_duration,
+            prefill_seed=prefill_seed,
+            instance_id=instance_id,
+            step_index=step_index,
+            cache_salt=cache_salt,
             cached_prompt_ids=cached_prompt_ids,
             history_after_assistant=history_after_assistant,
             actions=actions,
+            trace_tools=trace_tools,
             candidate_history=candidate_history,
         )
-        selected = prepared.candidates
-        plan = prepared.plan
-        stats["candidate_skipped_capacity_count"] = prepared.skipped_capacity_count
-        stats["candidate_selected_count"] = len(plan.branches)
-        stats["candidate_shared_prefix_tokens"] = max(
-            0,
-            plan.shared_prefix_len - prefill_seed.seed_prefix_len,
+        stats.update(candidate_stats)
+        return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
+
+    def new_prefill_worker(self, *, max_pending: int) -> AsyncPrefillWorker:
+        return AsyncPrefillWorker(
+            self.backend,
+            now=self.now,
+            max_pending=max_pending,
         )
-        if not plan.branches:
-            self.sleep_until(phase_start, total_duration)
-            return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
-
-        phase_deadline = phase_start + total_duration * self.time_scale if self.time_scale > 0 else None
-        if phase_deadline is not None and self.now() >= phase_deadline:
-            return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
-
-        worker = AsyncPrefillWorker(self.backend, now=self.now, max_pending=len(plan.branches))
-        viable_candidates = {branch.candidate_index for branch in plan.branches}
-        fallback_to_chunked = False
-        last_actual_prefix_len = prefill_seed.cached_prefix_len
-        try:
-            requests = self.submit_candidate_prefills(
-                worker=worker,
-                plan=plan,
-                instance_id=instance_id,
-                step_index=step_index,
-                cache_salt=cache_salt,
-            )
-            stats["candidate_submitted_count"] = len(requests.request_ids_by_candidate)
-            stats["prefill_submitted_count"] += len(requests.request_ids_by_candidate)
-
-            checkpoints = itertools.chain(
-                [(0.0, 0)],
-                iter_visible_checkpoints(
-                    trace_tools[0].output_events,
-                    trace_tools[0].duration_s,
-                    len(trace_tools[0].raw_output),
-                    self.prefill_check_interval_s,
-                ),
-            )
-            for check_time, raw_visible_chars in checkpoints:
-                self.sleep_until(phase_start, check_time)
-                if phase_deadline is not None and self.now() >= phase_deadline:
-                    break
-                visible_chars = self.clamp_stream_output_chars(raw_visible_chars)
-                if visible_chars <= 0:
-                    continue
-
-                actual_output = trace_tools[0].raw_output[:visible_chars]
-                if not fallback_to_chunked:
-                    surviving = {
-                        candidate_index
-                        for candidate_index in viable_candidates
-                        if selected[candidate_index].raw_output.startswith(actual_output)
-                    }
-                    stats["candidate_pruned_count"] += len(viable_candidates - surviving)
-                    viable_candidates = surviving
-                    if not viable_candidates:
-                        fallback_to_chunked = True
-                        stats["candidate_fallback_to_chunked"] = 1
-                        stats["candidate_cancelled_count"] += worker.retain_requests(set())
-                    else:
-                        stats["candidate_cancelled_count"] += worker.retain_requests(
-                            {requests.request_ids_by_candidate[index] for index in viable_candidates}
-                        )
-
-                if fallback_to_chunked:
-                    partial_output = trace_tools[0].output | {"output": actual_output}
-                    available_token_ids = self.available_prefill_token_ids(
-                        history_after_assistant=history_after_assistant,
-                        actions=actions,
-                        completed_outputs=[],
-                        action_index=0,
-                        partial_output=partial_output,
-                    )
-                    completed_request_ids = {completion.request_id for completion in worker.completed_prefills()}
-                    last_actual_prefix_len = max(
-                        last_actual_prefix_len,
-                        max(
-                            (
-                                align_down(
-                                    common_prefix_length(
-                                        available_token_ids,
-                                        requests.token_ids_by_request[request_id],
-                                    ),
-                                    self.cache_block_tokens,
-                                )
-                                for request_id in completed_request_ids
-                            ),
-                            default=prefill_seed.cached_prefix_len,
-                        ),
-                    )
-                    prefill_token_ids = self.next_prefill_chunk(
-                        available_token_ids,
-                        last_prefix_len=last_actual_prefix_len,
-                    )
-                    if prefill_token_ids is not None:
-                        request_id = f"{cache_salt}:tool_output:{uuid.uuid4().hex}"
-                        if worker.submit(
-                            AsyncPrefillRequest(
-                                token_ids=prefill_token_ids,
-                                cache_salt=cache_salt,
-                                step=ReplayStep(instance_id=instance_id, step_index=step_index),
-                                label="tool_output",
-                                request_id=request_id,
-                            )
-                        ):
-                            requests.token_ids_by_request[request_id] = prefill_token_ids
-                            stats["prefill_submitted_count"] += 1
-                            last_actual_prefix_len = len(prefill_token_ids)
-
-            self.sleep_until(phase_start, total_duration)
-            worker.raise_if_error()
-            completed = worker.completed_prefills()
-            stats["candidate_completed_count"] = sum(
-                completion.label == "candidate_tool_output" for completion in completed
-            )
-            stats["candidate_surviving_count"] = len(viable_candidates)
-            stats["prefill_completed_count"] = len(completed)
-            final_messages = history_after_assistant + self.observation_messages(
-                actions,
-                [tool.output for tool in trace_tools],
-            )
-            final_prompt_ids = self.tokenizer.encode_messages_with_state(
-                final_messages,
-                add_generation_prompt=True,
-            ).token_ids
-            candidate_verified_prefix = max(
-                self.verified_prefill_prefixes(
-                    final_prompt_ids,
-                    completed,
-                    requests.token_ids_by_request,
-                    label="candidate_tool_output",
-                ),
-                default=0,
-            )
-            completed_prefix_len = max(
-                self.verified_prefill_prefixes(
-                    final_prompt_ids,
-                    completed,
-                    requests.token_ids_by_request,
-                ),
-                default=prefill_seed.cached_prefix_len,
-            )
-            stats["candidate_verified_prefix_tokens"] = candidate_verified_prefix
-            stats["candidate_verified_tool_output_tokens"] = max(
-                0,
-                candidate_verified_prefix - prefill_seed.seed_prefix_len,
-            )
-            stats["prefill_completed_prompt_tokens"] = completed_prefix_len
-            stats["prefilled_prompt_suffix_tokens"] = max(
-                0,
-                completed_prefix_len - prefill_seed.cached_prefix_len,
-            )
-            stats["prefilled_tool_output_tokens"] = max(
-                0,
-                completed_prefix_len - prefill_seed.seed_prefix_len,
-            )
-            stats.update(worker.snapshot())
-            stats.update(worker.cancel_active())
-            return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
-        finally:
-            worker.stop_without_drain()
-
-    def prepare_candidate_prefill(
-        self,
-        *,
-        cached_prompt_ids: list[int],
-        history_after_assistant: list[dict[str, Any]],
-        actions: list[dict[str, Any]],
-        candidate_history: list[HistoricalToolCall],
-    ) -> PreparedCandidatePrefill:
-        retrieved = select_similar_candidates(
-            str(actions[0].get("command") or ""),
-            candidate_history,
-            top_k=self.candidate_top_k,
-        )
-        candidates = []
-        candidate_prompts = []
-        skipped_capacity_count = 0
-        for candidate in retrieved:
-            visible_output = candidate.raw_output[: self.clamp_stream_output_chars(len(candidate.raw_output))]
-            prompt = self.candidate_prompt_token_ids(
-                history_after_assistant=history_after_assistant,
-                actions=actions,
-                candidate_output=candidate.output | {"output": visible_output},
-            )
-            if self.max_context_tokens is not None and len(prompt) > self.max_context_tokens:
-                skipped_capacity_count += 1
-                continue
-            candidates.append(candidate)
-            candidate_prompts.append(prompt)
-
-        plan = CandidatePrefillPlan.build(
-            cached_prompt_ids,
-            candidate_prompts,
-            block_size=self.cache_block_tokens,
-        )
-        return PreparedCandidatePrefill(
-            candidates=tuple(candidates),
-            plan=plan,
-            skipped_capacity_count=skipped_capacity_count,
-        )
-
-    def submit_candidate_prefills(
-        self,
-        *,
-        worker: AsyncPrefillWorker,
-        plan: CandidatePrefillPlan,
-        instance_id: str,
-        step_index: int,
-        cache_salt: str,
-    ) -> CandidatePrefillRequests:
-        requests = CandidatePrefillRequests({}, {})
-        for branch in plan.branches:
-            request_id = f"{cache_salt}:candidate:{branch.candidate_index}:{uuid.uuid4().hex}"
-            token_ids = list(branch.token_ids)
-            submitted = worker.submit(
-                AsyncPrefillRequest(
-                    token_ids=token_ids,
-                    cache_salt=cache_salt,
-                    step=ReplayStep(instance_id=instance_id, step_index=step_index),
-                    label="candidate_tool_output",
-                    request_id=request_id,
-                )
-            )
-            if submitted:
-                requests.request_ids_by_candidate[branch.candidate_index] = request_id
-                requests.token_ids_by_request[request_id] = token_ids
-        return requests
-
-    def verified_prefill_prefixes(
-        self,
-        actual_prompt_ids: list[int],
-        completions: list[AsyncPrefillCompletion],
-        token_ids_by_request: dict[str, list[int]],
-        *,
-        label: str | None = None,
-    ) -> Iterator[int]:
-        for completion in completions:
-            if label is not None and completion.label != label:
-                continue
-            yield align_down(
-                common_prefix_length(
-                    actual_prompt_ids,
-                    token_ids_by_request[completion.request_id],
-                ),
-                self.cache_block_tokens,
-            )
 
     def candidate_prompt_token_ids(
         self,
@@ -1083,6 +813,33 @@ class TraceReplayRunner:
             candidate_messages,
             add_generation_prompt=True,
         ).token_ids
+
+    def final_tool_prompt_token_ids(
+        self,
+        *,
+        history_after_assistant: list[dict[str, Any]],
+        actions: list[dict[str, Any]],
+        trace_tools: list[TraceToolCall],
+    ) -> list[int]:
+        final_messages = history_after_assistant + self.observation_messages(
+            actions,
+            [tool.output for tool in trace_tools],
+        )
+        return self.tokenizer.encode_messages_with_state(
+            final_messages,
+            add_generation_prompt=True,
+        ).token_ids
+
+    def visible_checkpoints(self, tool: TraceToolCall) -> Iterator[tuple[float, int]]:
+        return itertools.chain(
+            [(0.0, 0)],
+            iter_visible_checkpoints(
+                tool.output_events,
+                tool.duration_s,
+                len(tool.raw_output),
+                self.prefill_check_interval_s,
+            ),
+        )
 
     def available_prefill_token_ids(
         self,

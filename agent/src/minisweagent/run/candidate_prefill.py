@@ -109,20 +109,43 @@ class _PrefixNode:
         self.min_rank = rank if self.min_rank is None else min(self.min_rank, rank)
 
     def candidate_order(self) -> list[int]:
-        entries: list[tuple[int, int | _PrefixNode]] = []
-        if self.candidate_index is not None:
-            entries.append((self.candidate_index, self.candidate_index))
-        entries.extend(
-            (child.min_rank if child.min_rank is not None else len(self.children), child)
-            for child in self.children.values()
-        )
         ordered = []
-        for _, entry in sorted(entries, key=lambda item: item[0]):
-            if isinstance(entry, int):
-                ordered.append(entry)
-            else:
-                ordered.extend(entry.candidate_order())
+        pending = list(reversed(self.traversal_entries()))
+        while pending:
+            entry = pending.pop()
+            if entry.candidate_index is not None:
+                ordered.append(entry.candidate_index)
+                continue
+            if entry.node is not None:
+                pending.extend(reversed(entry.node.traversal_entries()))
         return ordered
+
+    def traversal_entries(self) -> list[_TraversalEntry]:
+        entries = []
+        if self.candidate_index is not None:
+            entries.append(_TraversalEntry.for_candidate(self.candidate_index))
+        entries.extend(_TraversalEntry.for_node(child) for child in self.children.values())
+        return sorted(entries, key=lambda entry: entry.rank)
+
+    def first_rank(self) -> int:
+        if self.min_rank is None:
+            raise RuntimeError("prefix node has no candidate rank")
+        return self.min_rank
+
+
+@dataclass(frozen=True)
+class _TraversalEntry:
+    rank: int
+    candidate_index: int | None = None
+    node: _PrefixNode | None = None
+
+    @classmethod
+    def for_candidate(cls, candidate_index: int) -> _TraversalEntry:
+        return cls(rank=candidate_index, candidate_index=candidate_index)
+
+    @classmethod
+    def for_node(cls, node: _PrefixNode) -> _TraversalEntry:
+        return cls(rank=node.first_rank(), node=node)
 
 
 def unique_token_sequences(candidate_prompt_tokens: Sequence[Sequence[int]]) -> list[tuple[int, tuple[int, ...]]]:
