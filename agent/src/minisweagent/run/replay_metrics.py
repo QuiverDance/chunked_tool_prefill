@@ -47,6 +47,17 @@ RESULT_KEYS = (
     "active_prefill_cancel_requested_at_tool_end",
     "active_prefill_cancel_latency_s",
     "active_prefill_cancel_error",
+    "candidate_selected_count",
+    "candidate_skipped_capacity_count",
+    "candidate_submitted_count",
+    "candidate_completed_count",
+    "candidate_shared_prefix_tokens",
+    "candidate_verified_prefix_tokens",
+    "candidate_verified_tool_output_tokens",
+    "candidate_pruned_count",
+    "candidate_surviving_count",
+    "candidate_fallback_to_chunked",
+    "candidate_cancelled_count",
 )
 
 SUMMARY_METRIC_KEYS = (
@@ -82,6 +93,17 @@ SUMMARY_METRIC_KEYS = (
     "pending_prefill_prefix_len_at_tool_end",
     "active_prefill_cancel_requested_at_tool_end",
     "active_prefill_cancel_latency_s",
+    "candidate_selected_count",
+    "candidate_skipped_capacity_count",
+    "candidate_submitted_count",
+    "candidate_completed_count",
+    "candidate_shared_prefix_tokens",
+    "candidate_verified_prefix_tokens",
+    "candidate_verified_tool_output_tokens",
+    "candidate_pruned_count",
+    "candidate_surviving_count",
+    "candidate_fallback_to_chunked",
+    "candidate_cancelled_count",
 )
 
 
@@ -97,7 +119,9 @@ def summarize(records: list[dict[str, Any]], invalid_records: list[dict[str, Any
         "measured": len(records),
         "valid": len(valid),
         "skipped": len(skipped) + len(invalid_records),
-        "capacity_skips": sum(1 for record in records + invalid_records if record.get("skip_reason") == "skipped_capacity"),
+        "capacity_skips": sum(
+            1 for record in records + invalid_records if record.get("skip_reason") == "skipped_capacity"
+        ),
         "skip_reasons": reason_counts(records + invalid_records),
         "algorithms": value_counts(record.get("algorithm") for record in valid),
     }

@@ -13,6 +13,7 @@ TOKENIZER_PATH="${TOKENIZER_PATH:-/home/pjw7200/models/Mistral-Small-3.2-24B-Ins
 API_BASE="${API_BASE:-http://127.0.0.1:${PORT}/v1}"
 MAX_CONTEXT_TOKENS="${MAX_CONTEXT_TOKENS:-131072}"
 CACHE_BLOCK_TOKENS="${CACHE_BLOCK_TOKENS:-16}"
+CANDIDATE_TOP_K="${CANDIDATE_TOP_K:-4}"
 
 if [[ ! -x "$MINI_EXTRA" ]]; then
   MINI_EXTRA="mini-extra"
@@ -26,6 +27,7 @@ echo "tokenizer_path=$TOKENIZER_PATH"
 echo "api_base=$API_BASE"
 echo "max_context_tokens=$MAX_CONTEXT_TOKENS"
 echo "cache_block_tokens=$CACHE_BLOCK_TOKENS"
+echo "candidate_top_k=$CANDIDATE_TOP_K"
 
 exec "$MINI_EXTRA" replay "$TRACE_PATH" \
   --output "$OUTPUT_DIR" \
@@ -39,4 +41,5 @@ exec "$MINI_EXTRA" replay "$TRACE_PATH" \
   -c "replay.api_base=${API_BASE}" \
   -c "replay.prefill_url=${API_BASE}/prefill" \
   -c "replay.max_context_tokens=${MAX_CONTEXT_TOKENS}" \
-  -c "replay.cache_block_tokens=${CACHE_BLOCK_TOKENS}"
+  -c "replay.cache_block_tokens=${CACHE_BLOCK_TOKENS}" \
+  -c "replay.candidate_prefill.top_k=${CANDIDATE_TOP_K}"

@@ -26,6 +26,8 @@ class AsyncPrefillRequest:
 
 @dataclass(frozen=True)
 class AsyncPrefillCompletion:
+    request_id: str
+    label: str
     prefix_len: int
     finished_at: float
 

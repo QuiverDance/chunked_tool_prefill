@@ -6,6 +6,8 @@
 # can be prefetched as they arrive.
 replay:
   stream_output_char_limit: 5000
+  candidate_prefill:
+    top_k: 4
 
 model:
   stream_observation_template: "<output>\n{{ output.output[:5000] }}"

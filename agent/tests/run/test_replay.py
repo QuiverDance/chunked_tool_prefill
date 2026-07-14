@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import time
 
@@ -41,6 +42,26 @@ def make_trajectory(raw_output: str = "trace-output") -> dict:
             {"role": "exit", "content": "done"},
         ],
     }
+
+
+def make_candidate_trajectory() -> dict:
+    data = make_trajectory()
+    data["messages"] = [
+        data["messages"][0],
+        data["messages"][1],
+        assistant_message(0, "pytest tests/a.py -q", completion_tokens=5),
+        tool_message("shared-prefix-from-history", duration_s=0.01, events=[]),
+        assistant_message(1, "pytest tests/b.py -q", completion_tokens=7),
+        tool_message(
+            "shared-prefix-from-current",
+            duration_s=0.05,
+            events=[{"t": 0.04, "output_chars": 26}],
+        ),
+        assistant_message(2, "echo done", completion_tokens=3),
+        tool_message("done", duration_s=0.01, events=[]),
+        {"role": "exit", "content": "done"},
+    ]
+    return data
 
 
 def assistant_message(index: int, command: str, *, completion_tokens: int) -> dict:
@@ -225,6 +246,7 @@ class FakeBackend:
                 "cache_salt": cache_salt,
                 "label": label,
                 "request_id": request_id,
+                "step_index": step.step_index,
             }
         )
 
@@ -246,6 +268,7 @@ class BlockingPrefillBackend(FakeBackend):
             request_id=request_id,
         )
         self.release.wait(timeout=1)
+        self.release.clear()
 
     def cancel_prefill(self, request_id):
         super().cancel_prefill(request_id)
@@ -289,7 +312,7 @@ def test_tokenizer_safe_messages_parse_tool_call_arguments():
                 {
                     "id": "call_1",
                     "type": "function",
-                    "function": {"name": "bash", "arguments": "{\"command\": \"pwd\"}"},
+                    "function": {"name": "bash", "arguments": '{"command": "pwd"}'},
                 }
             ],
             "extra": {"ignored": True},
@@ -300,7 +323,7 @@ def test_tokenizer_safe_messages_parse_tool_call_arguments():
 
     assert "extra" not in safe[0]
     assert safe[0]["tool_calls"][0]["function"]["arguments"] == {"command": "pwd"}
-    assert messages[0]["tool_calls"][0]["function"]["arguments"] == "{\"command\": \"pwd\"}"
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == '{"command": "pwd"}'
 
 
 def test_mistral_safe_messages_normalize_tool_call_ids():
@@ -312,7 +335,7 @@ def test_mistral_safe_messages_normalize_tool_call_ids():
                 {
                     "id": "call_1234567890abcdef",
                     "type": "function",
-                    "function": {"name": "bash", "arguments": "{\"command\": \"pwd\"}"},
+                    "function": {"name": "bash", "arguments": '{"command": "pwd"}'},
                 }
             ],
         },
@@ -362,6 +385,15 @@ def test_stream_output_char_limit_can_be_configured():
     assert kwargs["stream_output_char_limit"] == 5000
 
 
+def test_candidate_prefill_top_k_can_be_configured():
+    kwargs = runner_kwargs(
+        {"replay": {"candidate_prefill": {"top_k": 3}}},
+        algorithm="candidate",
+    )
+
+    assert kwargs["candidate_top_k"] == 3
+
+
 def test_baseline_replay_uses_trace_output_without_executing_commands(tmp_path):
     data = make_trajectory(raw_output="trace-output")
     backend = FakeBackend()
@@ -394,7 +426,7 @@ def test_prepare_replay_scenario_copies_trace_messages(tmp_path):
 def test_replay_allows_trace_without_original_ttft(tmp_path):
     data = make_trajectory(raw_output="trace-output")
     for message in data["messages"]:
-        model_call = (((message.get("extra") or {}).get("token_timing") or {}).get("model_call") or {})
+        model_call = ((message.get("extra") or {}).get("token_timing") or {}).get("model_call") or {}
         model_call["ttft_s"] = None
 
     scenario = prepare_replay_scenario(tmp_path / "case.traj.json", data)
@@ -595,9 +627,7 @@ def test_chunked_keeps_pending_prefill_one_chunk_ahead(tmp_path):
     assert records[0]["prefill_active_at_tool_end"] == 1
     assert records[0]["prefill_pending_at_tool_end"] == 1
     assert (
-        records[0]["pending_prefill_prefix_len_at_tool_end"]
-        - records[0]["active_prefill_prefix_len_at_tool_end"]
-        == 64
+        records[0]["pending_prefill_prefix_len_at_tool_end"] - records[0]["active_prefill_prefix_len_at_tool_end"] == 64
     )
 
 
@@ -635,9 +665,7 @@ def test_chunked_replay_advances_prefill_in_fixed_size_chunks(tmp_path):
     data = make_trajectory(raw_output="x" * 240)
     data["messages"][3]["extra"]["timestamp"] = 0.2
     data["messages"][3]["extra"]["token_timing"]["tool_calls"][0]["duration_s"] = 0.2
-    data["messages"][3]["extra"]["token_timing"]["tool_calls"][0]["output_events"] = [
-        {"t": 0.005, "output_chars": 240}
-    ]
+    data["messages"][3]["extra"]["token_timing"]["tool_calls"][0]["output_events"] = [{"t": 0.005, "output_chars": 240}]
     backend = FakeBackend()
     runner = make_runner(
         backend,
@@ -725,6 +753,286 @@ def test_chunked_replay_without_next_assistant_does_not_prefill_final_tool(tmp_p
     assert records[-1]["prefill_count"] == 0
 
 
+def test_candidate_replay_prefills_historical_output_for_a_similar_command(tmp_path):
+    data = make_candidate_trajectory()
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=4,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    candidate_prefills = [prefill for prefill in backend.prefills if prefill["label"] == "candidate_tool_output"]
+    assert invalid == []
+    assert records[0]["candidate_selected_count"] == 0
+    assert records[1]["candidate_selected_count"] == 1
+    assert records[1]["candidate_completed_count"] == 1
+    assert len(candidate_prefills) == 1
+    assert "shared-prefix-from-history" in candidate_prefills[0]["text"]
+    assert candidate_prefills[0]["cache_salt"] == backend.generations[1]["cache_salt"]
+    expected_verified_prefix = len(
+        os.path.commonprefix([candidate_prefills[0]["text"], backend.generations[2]["text"]]).encode()
+    )
+    assert records[1]["candidate_verified_prefix_tokens"] == expected_verified_prefix
+    assert records[1]["prefill_completed_prompt_tokens"] == expected_verified_prefix
+
+
+def test_candidate_planning_overlaps_tool_time(tmp_path):
+    data = make_candidate_trajectory()
+    clock = FakeClock()
+    tokenizer = DelayedSeedTokenizer(clock, delay=0.005)
+    runner = make_runner_with_tokenizer(
+        FakeBackend(),
+        data,
+        tokenizer,
+        algorithm="candidate",
+        clock=clock,
+        candidate_top_k=4,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    assert invalid == []
+    assert abs(records[0]["problem_e2e_s"] - 0.07) < 1e-9
+
+
+def test_candidate_replay_prefills_all_branches_in_shared_subtree_order(tmp_path):
+    data = make_trajectory()
+    messages = [data["messages"][0], data["messages"][1]]
+    history = [
+        ("pytest tests/a.py -q", "shared/a-two"),
+        ("cat README.md", "zzz"),
+        ("pytest tests/c.py -q", "different"),
+        ("pytest tests/d.py -q", "shared/a-one"),
+    ]
+    for index, (command, output) in enumerate(history):
+        messages.extend(
+            [
+                assistant_message(index, command, completion_tokens=3),
+                tool_message(output, duration_s=0.01, events=[]),
+            ]
+        )
+    messages.extend(
+        [
+            assistant_message(4, "pytest tests/e.py -q", completion_tokens=3),
+            tool_message("shared/actual", duration_s=0.2, events=[]),
+            assistant_message(5, "echo done", completion_tokens=3),
+            tool_message("done", duration_s=0.01, events=[]),
+            {"role": "exit", "content": "done"},
+        ]
+    )
+    data["messages"] = messages
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=4,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    target_prefills = [
+        prefill
+        for prefill in backend.prefills
+        if prefill["label"] == "candidate_tool_output" and prefill["step_index"] == 4
+    ]
+    assert invalid == []
+    assert records[4]["candidate_selected_count"] == 4
+    assert records[4]["candidate_completed_count"] == 4
+    assert len(target_prefills) == 4
+    candidate_suffixes = [item["text"].rsplit("tool:", 1)[-1] for item in target_prefills]
+    assert [
+        next(output for output in ("shared/a-one", "shared/a-two", "different", "zzz") if output in suffix)
+        for suffix in candidate_suffixes
+    ] == [
+        "shared/a-one",
+        "shared/a-two",
+        "different",
+        "zzz",
+    ]
+
+
+def test_candidate_replay_falls_back_to_actual_chunks_when_every_candidate_misses(tmp_path):
+    data = make_candidate_trajectory()
+    current_tool = data["messages"][5]
+    current_tool["extra"]["raw_output"] = "totally-new-output"
+    current_tool["extra"]["timestamp"] = 0.2
+    timing = current_tool["extra"]["token_timing"]["tool_calls"][0]
+    timing["duration_s"] = 0.2
+    timing["output_events"] = [{"t": 0.02, "output_chars": len("totally-new-output")}]
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=4,
+        prefill_chunk_tokens=4,
+        prefill_check_interval_s=0.01,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    target_prefills = [prefill for prefill in backend.prefills if prefill["step_index"] == 1]
+    assert invalid == []
+    assert records[1]["candidate_selected_count"] == 1
+    assert records[1]["candidate_fallback_to_chunked"] == 1
+    assert records[1]["candidate_surviving_count"] == 0
+    assert [prefill["label"] for prefill in target_prefills][0] == "candidate_tool_output"
+    assert "tool_output" in [prefill["label"] for prefill in target_prefills]
+
+
+def test_candidate_fallback_continues_after_a_completed_matching_prefix(tmp_path):
+    data = make_candidate_trajectory()
+    data["messages"][3] = tool_message("long-shared-prefix-HISTORY", duration_s=0.01, events=[])
+    data["messages"][5] = tool_message(
+        "long-shared-prefix-CURRENT",
+        duration_s=0.2,
+        events=[{"t": 0.02, "output_chars": len("long-shared-prefix-CURRENT")}],
+    )
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=1,
+        prefill_chunk_tokens=4,
+        prefill_check_interval_s=0.01,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    target_prefills = [prefill for prefill in backend.prefills if prefill["step_index"] == 1]
+    candidate = next(prefill for prefill in target_prefills if prefill["label"] == "candidate_tool_output")
+    actual = next(prefill for prefill in target_prefills if prefill["label"] == "tool_output")
+    final_actual_prompt = backend.generations[2]["text"]
+    matching_prefix = len(os.path.commonprefix([candidate["text"], final_actual_prompt]).encode())
+    assert invalid == []
+    assert records[1]["candidate_fallback_to_chunked"] == 1
+    assert actual["tokens"] == matching_prefix + 4
+
+
+def test_candidate_prefill_applies_the_stream_output_character_limit(tmp_path):
+    data = make_candidate_trajectory()
+    data["messages"][3] = tool_message("abcdefghijk", duration_s=0.01, events=[])
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=1,
+        stream_output_char_limit=5,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    candidate = next(
+        prefill
+        for prefill in backend.prefills
+        if prefill["step_index"] == 1 and prefill["label"] == "candidate_tool_output"
+    )
+    candidate_observation = candidate["text"].rsplit("tool:", 1)[-1]
+    assert invalid == []
+    assert records[1]["candidate_selected_count"] == 1
+    assert "<output>abcde" in candidate_observation
+    assert "fghijk" not in candidate_observation
+
+
+def test_candidate_prefill_skips_a_branch_that_exceeds_the_context_limit(tmp_path):
+    data = make_candidate_trajectory()
+    data["messages"][3] = tool_message("x" * 200, duration_s=0.01, events=[])
+    data["messages"][5] = tool_message("different", duration_s=0.05, events=[])
+
+    probe_backend = FakeBackend()
+    probe = make_runner(
+        probe_backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=1,
+        cache_block_tokens=1,
+    )
+    probe.run_trajectory(tmp_path / "probe.traj.json", data)
+    candidate_tokens = next(
+        prefill["tokens"]
+        for prefill in probe_backend.prefills
+        if prefill["step_index"] == 1 and prefill["label"] == "candidate_tool_output"
+    )
+    max_actual_prompt_tokens = max(len(generation["text"].encode()) for generation in probe_backend.generations)
+    assert candidate_tokens > max_actual_prompt_tokens
+
+    backend = FakeBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=1,
+        max_context_tokens=max_actual_prompt_tokens,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    target_prefills = [prefill for prefill in backend.prefills if prefill["step_index"] == 1]
+    assert invalid == []
+    assert records[1]["candidate_selected_count"] == 0
+    assert records[1]["candidate_skipped_capacity_count"] == 1
+    assert target_prefills == []
+
+
+def test_candidate_replay_aborts_a_wrong_branch_and_keeps_a_matching_branch(tmp_path):
+    data = make_trajectory()
+    data["messages"] = [
+        data["messages"][0],
+        data["messages"][1],
+        assistant_message(0, "pytest tests/a.py -q", completion_tokens=3),
+        tool_message("matching-prefix-from-history", duration_s=0.01, events=[]),
+        assistant_message(1, "pytest tests/b.py -q", completion_tokens=3),
+        tool_message("wrong-prefix-from-history", duration_s=0.01, events=[]),
+        assistant_message(2, "pytest tests/c.py -q", completion_tokens=3),
+        tool_message(
+            "matching-prefix-from-current",
+            duration_s=0.2,
+            events=[{"t": 0.02, "output_chars": len("matching-prefix-from-")}],
+        ),
+        assistant_message(3, "echo done", completion_tokens=3),
+        tool_message("done", duration_s=0.01, events=[]),
+        {"role": "exit", "content": "done"},
+    ]
+    backend = BlockingPrefillBackend()
+    runner = make_runner(
+        backend,
+        data,
+        algorithm="candidate",
+        candidate_top_k=2,
+        prefill_check_interval_s=0.01,
+        cache_block_tokens=1,
+    )
+
+    records, invalid = runner.run_trajectory(tmp_path / "case.traj.json", data)
+
+    target_prefills = [prefill for prefill in backend.prefills if prefill["step_index"] == 2]
+    assert invalid == []
+    assert records[2]["candidate_selected_count"] == 2
+    assert records[2]["candidate_pruned_count"] == 1
+    assert records[2]["candidate_surviving_count"] == 1
+    assert records[2]["candidate_fallback_to_chunked"] == 0
+    assert records[2]["candidate_cancelled_count"] == 1
+    assert [prefill["label"] for prefill in target_prefills] == [
+        "candidate_tool_output",
+        "candidate_tool_output",
+    ]
+    assert backend.cancelled_prefills
+
+
 def test_scheduled_checks_are_on_interval_after_output_events():
     events = [{"t": 0.011, "output_chars": 10}, {"t": 0.037, "output_chars": 20}]
 
@@ -762,12 +1070,14 @@ def test_record_output_keeps_only_core_metrics():
         "skip_reason": "",
         "trace_ttft_s": 0.2,
         "replay_ttft_s": 0.3,
+        "candidate_selected_count": 4,
         "internal_debug_counter": 100,
     }
 
     compact = record_for_output(record)
 
     assert "trace_ttft_s" in compact
+    assert compact["candidate_selected_count"] == 4
     assert "internal_debug_counter" not in compact
 
 
