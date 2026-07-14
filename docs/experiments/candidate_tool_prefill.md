@@ -15,7 +15,7 @@ For each tool call that has a later assistant turn, replay does the following:
 5. Tokenize the candidate prompts, remove duplicate token sequences, and skip prompts beyond the configured context limit.
 6. Build a prefix tree and submit every branch in depth-first subtree order with the same cache salt. vLLM's normal automatic prefix cache shares the history trunk and already materialized candidate trunks.
 7. As actual output becomes visible, remove every branch whose raw text no longer starts with that exact text.
-8. If there is no eligible candidate, or every branch misses, continue with the existing actual-output chunked prefill. A completed candidate's verified prefix remains the starting point, so fallback does not recalculate matching blocks.
+8. If there is no eligible candidate, or every branch misses, continue with actual-output chunked prefill. These streaming prompts also use blank return-code and exception placeholders until the tool completes. A completed candidate's verified prefix remains the starting point, so fallback does not recalculate matching blocks.
 9. At the tool deadline, snapshot and cancel outstanding work before final-prompt tokenization. Only requests completed no later than that deadline are considered.
 10. Compare those completed prefill requests with the final prompt token by token. Only the block-aligned longest common prefix is reported as reusable.
 

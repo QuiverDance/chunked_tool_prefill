@@ -698,7 +698,7 @@ class TraceReplayRunner:
                         break
                     visible_chars = self.clamp_stream_output_chars(raw_visible_chars)
                     if visible_chars != last_visible_chars:
-                        partial_output = tool.output | {"output": tool.raw_output[:visible_chars]}
+                        partial_output = self.streaming_tool_output(tool.raw_output[:visible_chars])
                         available_token_ids = self.available_prefill_token_ids(
                             history_after_assistant=history_after_assistant,
                             actions=actions,
@@ -874,6 +874,14 @@ class TraceReplayRunner:
         if self.stream_output_char_limit is None:
             return visible_chars
         return min(visible_chars, max(0, self.stream_output_char_limit))
+
+    def streaming_tool_output(self, output: str) -> dict[str, Any]:
+        return {
+            "output": output,
+            "returncode": "",
+            "exception_info": "",
+            "extra": {},
+        }
 
     def observation_messages(
         self,

@@ -92,6 +92,8 @@ class CandidateReplayHost(Protocol):
 
     def clamp_stream_output_chars(self, visible_chars: int) -> int: ...
 
+    def streaming_tool_output(self, output: str) -> dict[str, Any]: ...
+
     def sleep_until(self, phase_start: float, replay_elapsed_s: float) -> None: ...
 
 
@@ -198,7 +200,7 @@ class CandidateToolPrefillPhase:
                     actions=actions,
                     completed_outputs=[],
                     action_index=0,
-                    partial_output=trace_tools[0].output | {"output": actual_output},
+                    partial_output=self.host.streaming_tool_output(actual_output),
                 )
                 last_actual_prefix_len = self.completed_prefix_frontier(
                     available_token_ids,
@@ -297,12 +299,7 @@ class CandidateToolPrefillPhase:
             prompt = self.host.candidate_prompt_token_ids(
                 history_after_assistant=history_after_assistant,
                 actions=actions,
-                candidate_output={
-                    "output": visible_output,
-                    "returncode": "",
-                    "exception_info": "",
-                    "extra": {},
-                },
+                candidate_output=self.host.streaming_tool_output(visible_output),
             )
             if self.host.max_context_tokens is not None and len(prompt) > self.host.max_context_tokens:
                 skipped_capacity_count += 1

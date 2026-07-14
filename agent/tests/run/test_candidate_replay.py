@@ -63,6 +63,11 @@ def test_candidate_replay_prefills_historical_output_for_a_similar_command(tmp_p
 
 def test_candidate_replay_uses_chunked_prefill_when_history_is_empty(tmp_path):
     data = make_trajectory(raw_output="first-output")
+    data["info"]["config"]["model"]["stream_observation_template"] = (
+        "<output>{{ output.output }}|rc={{ output.returncode }}|exc={{ output.exception_info }}"
+    )
+    data["messages"][3]["extra"]["returncode"] = 88
+    data["messages"][3]["extra"]["exception_info"] = "not-visible-yet"
     backend = FakeBackend()
     runner = make_runner(
         backend,
@@ -81,6 +86,10 @@ def test_candidate_replay_uses_chunked_prefill_when_history_is_empty(tmp_path):
     assert records[0]["candidate_selected_count"] == 0
     assert records[0]["candidate_fallback_to_chunked"] == 1
     assert "tool_output" in [prefill["label"] for prefill in first_tool_prefills]
+    for prefill in first_tool_prefills:
+        streamed_observation = prefill["text"].rsplit("tool:", 1)[-1]
+        assert "rc=88" not in streamed_observation
+        assert "not-visible-yet" not in streamed_observation
 
 
 def test_candidate_prompt_does_not_copy_historical_result_metadata(tmp_path):
