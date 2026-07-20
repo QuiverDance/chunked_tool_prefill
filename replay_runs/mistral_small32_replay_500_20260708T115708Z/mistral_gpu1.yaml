@@ -1,0 +1,26 @@
+agent:
+  tokenizer_path: /home/pjw7200/models/Mistral-Small-3.2-24B-Instruct-2506
+  tokenizer_local_files_only: true
+
+model:
+  model_name: hosted_vllm/mistral-small32-24b
+  model_kwargs:
+    api_base: http://127.0.0.1:8001/v1
+    drop_params: true
+    max_tokens: 32768
+    stream: true
+    stream_options:
+      include_usage: true
+
+replay:
+  served_model_name: mistral-small32-24b
+  api_base: http://127.0.0.1:8001/v1
+  prefill_url: http://127.0.0.1:8001/v1/prefill
+  max_context_tokens: 131072
+  cache_block_tokens: 16
+  prefill_chunk_tokens: 128
+  prefill_check_interval_s: 0.05
+  prefill_safety_tail_tokens: 0
+  stream_output_char_limit: 5000
+  time_scale: 1.0
+  timeout: 600

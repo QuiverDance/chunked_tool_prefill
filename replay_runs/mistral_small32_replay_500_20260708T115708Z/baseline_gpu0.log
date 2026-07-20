@@ -1,0 +1,6 @@
+👋 This is mini-swe-agent version 2.3.0.
+Check the v2 migration guide at https://klieret.short.gy/mini-v2-migration
+Loading global config from '/home/pjw7200/.config/mini-swe-agent/.env'
+Replay complete: 26842 valid, 0 skipped. Results saved to 
+/home/pjw7200/chunked_tool_prefill/replay_runs/mistral_small32_replay_500_202607
+08T115708Z/baseline_gpu0

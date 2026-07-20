@@ -1,0 +1,203 @@
+{
+  "active_prefill_cancel_latency_s": {
+    "count": 0,
+    "mean": null,
+    "median": null,
+    "p95": null
+  },
+  "active_prefill_cancel_requested_at_tool_end": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "active_prefill_prefix_len_at_tool_end": {
+    "count": 0,
+    "mean": null,
+    "median": null,
+    "p95": null
+  },
+  "algorithms": {
+    "baseline": 31
+  },
+  "cached_tokens": {
+    "count": 0,
+    "mean": null,
+    "median": null,
+    "p95": null
+  },
+  "capacity_skips": 0,
+  "measured": 31,
+  "missing_tool_timing_count": {
+    "count": 31,
+    "mean": 0.5483870967741935,
+    "median": 1.0,
+    "p95": 1.0
+  },
+  "pending_prefill_prefix_len_at_tool_end": {
+    "count": 0,
+    "mean": null,
+    "median": null,
+    "p95": null
+  },
+  "prefill_active_at_tool_end": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefill_completed_count": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefill_completed_prompt_tokens": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefill_count": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefill_pending_at_tool_end": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefill_started_count": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefill_submitted_count": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefilled_prompt_suffix_tokens": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "prefilled_tool_output_tokens": {
+    "count": 31,
+    "mean": 0.0,
+    "median": 0.0,
+    "p95": 0.0
+  },
+  "problem_e2e_s": {
+    "count": 1,
+    "mean": 142.73649578168988,
+    "median": 142.73649578168988,
+    "p95": 142.73649578168988
+  },
+  "prompt_tokens": {
+    "count": 31,
+    "mean": 11254.870967741936,
+    "median": 10650.0,
+    "p95": 20821.0
+  },
+  "replay_completion_tokens": {
+    "count": 31,
+    "mean": 423.7096774193548,
+    "median": 196.0,
+    "p95": 1087.0
+  },
+  "replay_decode_s": {
+    "count": 31,
+    "mean": 3.760914703936226,
+    "median": 1.7280475134029984,
+    "p95": 9.712594895623624
+  },
+  "replay_model_total_s": {
+    "count": 31,
+    "mean": 3.8203605904334013,
+    "median": 1.7715067244134843,
+    "p95": 9.81417476059869
+  },
+  "replay_ttft_s": {
+    "count": 31,
+    "mean": 0.0594458864971755,
+    "median": 0.05321740685030818,
+    "p95": 0.10157986497506499
+  },
+  "simulated_tool_duration_s": {
+    "count": 31,
+    "mean": 0.7664287295492906,
+    "median": 0.2721515861339867,
+    "p95": 3.1543258167803288
+  },
+  "skip_reasons": {},
+  "skipped": 0,
+  "tool_call_count": {
+    "count": 31,
+    "mean": 1.0,
+    "median": 1.0,
+    "p95": 1.0
+  },
+  "tool_output_chars": {
+    "count": 31,
+    "mean": 1005.5806451612904,
+    "median": 504.0,
+    "p95": 1532.0
+  },
+  "tool_output_events": {
+    "count": 31,
+    "mean": 0.4838709677419355,
+    "median": 0.0,
+    "p95": 1.0
+  },
+  "total": 31,
+  "trace_completion_tokens": {
+    "count": 31,
+    "mean": 423.7096774193548,
+    "median": 196.0,
+    "p95": 1087.0
+  },
+  "trace_decode_s": {
+    "count": 31,
+    "mean": 4.9417800574954,
+    "median": 2.2800621250644326,
+    "p95": 12.733051198069006
+  },
+  "trace_model_total_s": {
+    "count": 31,
+    "mean": 5.091160172806872,
+    "median": 2.3865099558606744,
+    "p95": 12.943605631124228
+  },
+  "trace_prompt_tokens": {
+    "count": 31,
+    "mean": 13328.90322580645,
+    "median": 12928.0,
+    "p95": 24490.0
+  },
+  "trace_ttft_s": {
+    "count": 31,
+    "mean": 0.14938011531147263,
+    "median": 0.14932879712432623,
+    "p95": 0.21809219382703304
+  },
+  "unprefilled_prompt_suffix_tokens": {
+    "count": 0,
+    "mean": null,
+    "median": null,
+    "p95": null
+  },
+  "unprefilled_tool_output_tokens": {
+    "count": 0,
+    "mean": null,
+    "median": null,
+    "p95": null
+  },
+  "valid": 31
+}
