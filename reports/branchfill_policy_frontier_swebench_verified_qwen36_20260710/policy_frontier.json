@@ -1,0 +1,1612 @@
+{
+  "exact_args_recent": {
+    "1": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 215035,
+      "reuse_ratio": 0.026706692862289046,
+      "eligible_calls": 1758,
+      "eligible_output_tokens": 522560,
+      "eligible_reuse_ratio": 0.41150298530312307,
+      "positive_lcp_calls": 1349,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 8.134480801967088,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "p95": 4.0,
+        "p99": 209.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.024722165999740815,
+        "p25": 0.0021334192868524334,
+        "median": 0.011796168984855526,
+        "p75": 0.03346434964194098,
+        "p90": 0.06383155676639517,
+        "p95": 0.08989751055327656,
+        "p99": 0.15173723478921047
+      },
+      "thresholds": {
+        "1": {
+          "calls": 1349,
+          "all_call_rate": 0.05103083033856629,
+          "eligible_call_rate": 0.767349260523322
+        },
+        "8": {
+          "calls": 1294,
+          "all_call_rate": 0.04895025534329488,
+          "eligible_call_rate": 0.7360637087599545
+        },
+        "32": {
+          "calls": 995,
+          "all_call_rate": 0.03763949309627388,
+          "eligible_call_rate": 0.5659840728100114
+        },
+        "64": {
+          "calls": 717,
+          "all_call_rate": 0.02712313221108379,
+          "eligible_call_rate": 0.40784982935153585
+        },
+        "128": {
+          "calls": 458,
+          "all_call_rate": 0.017325515415169284,
+          "eligible_call_rate": 0.2605233219567691
+        },
+        "256": {
+          "calls": 212,
+          "all_call_rate": 0.008019670890864384,
+          "eligible_call_rate": 0.12059158134243458
+        },
+        "512": {
+          "calls": 94,
+          "all_call_rate": 0.003555891810100246,
+          "eligible_call_rate": 0.053469852104664393
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.02373552586833707,
+        "high": 0.02976109768692696
+      },
+      "selected_candidates": 1758,
+      "compatible_candidates": 1755,
+      "mean_selected_candidates": 0.06650274257613013,
+      "any_prior_oracle_capture": 0.2697469683494047,
+      "same_category_oracle_capture": 0.4121726396414873,
+      "same_signature_oracle_capture": 0.4615415985198731
+    },
+    "2": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 221075,
+      "reuse_ratio": 0.02745684248857419,
+      "eligible_calls": 1758,
+      "eligible_output_tokens": 522560,
+      "eligible_reuse_ratio": 0.423061466625842,
+      "positive_lcp_calls": 1370,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 8.36296576508417,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "p95": 7.0,
+        "p99": 218.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.02528810342150735,
+        "p25": 0.0021334192868524334,
+        "median": 0.012531674128423988,
+        "p75": 0.03411906892881095,
+        "p90": 0.06578375886360313,
+        "p95": 0.09178365836826723,
+        "p99": 0.15293128464179695
+      },
+      "thresholds": {
+        "1": {
+          "calls": 1370,
+          "all_call_rate": 0.0518252317003972,
+          "eligible_call_rate": 0.7792946530147895
+        },
+        "8": {
+          "calls": 1316,
+          "all_call_rate": 0.04978248534140344,
+          "eligible_call_rate": 0.7485779294653014
+        },
+        "32": {
+          "calls": 1017,
+          "all_call_rate": 0.038471723094382446,
+          "eligible_call_rate": 0.5784982935153583
+        },
+        "64": {
+          "calls": 737,
+          "all_call_rate": 0.027879704936637034,
+          "eligible_call_rate": 0.419226393629124
+        },
+        "128": {
+          "calls": 468,
+          "all_call_rate": 0.017703801777945904,
+          "eligible_call_rate": 0.26621160409556316
+        },
+        "256": {
+          "calls": 222,
+          "all_call_rate": 0.008397957253641007,
+          "eligible_call_rate": 0.12627986348122866
+        },
+        "512": {
+          "calls": 96,
+          "all_call_rate": 0.0036315490826555703,
+          "eligible_call_rate": 0.05460750853242321
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.024399854251759775,
+        "high": 0.03050402646476469
+      },
+      "selected_candidates": 2194,
+      "compatible_candidates": 2190,
+      "mean_selected_candidates": 0.08299602799319085,
+      "any_prior_oracle_capture": 0.27732374277603483,
+      "same_category_oracle_capture": 0.42374993051708704,
+      "same_signature_oracle_capture": 0.474505586963894
+    },
+    "4": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 222239,
+      "reuse_ratio": 0.027601407747679472,
+      "eligible_calls": 1758,
+      "eligible_output_tokens": 522560,
+      "eligible_reuse_ratio": 0.425288962033068,
+      "positive_lcp_calls": 1373,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 8.406998297711368,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "p95": 7.0,
+        "p99": 220.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.025371544044484884,
+        "p25": 0.0021334192868524334,
+        "median": 0.012664052572169973,
+        "p75": 0.03411906892881095,
+        "p90": 0.06580945156576112,
+        "p95": 0.09178365836826723,
+        "p99": 0.15293128464179695
+      },
+      "thresholds": {
+        "1": {
+          "calls": 1373,
+          "all_call_rate": 0.05193871760923019,
+          "eligible_call_rate": 0.7810011376564278
+        },
+        "8": {
+          "calls": 1318,
+          "all_call_rate": 0.04985814261395877,
+          "eligible_call_rate": 0.7497155858930603
+        },
+        "32": {
+          "calls": 1020,
+          "all_call_rate": 0.03858520900321544,
+          "eligible_call_rate": 0.5802047781569966
+        },
+        "64": {
+          "calls": 738,
+          "all_call_rate": 0.027917533572914696,
+          "eligible_call_rate": 0.4197952218430034
+        },
+        "128": {
+          "calls": 470,
+          "all_call_rate": 0.01777945905050123,
+          "eligible_call_rate": 0.267349260523322
+        },
+        "256": {
+          "calls": 224,
+          "all_call_rate": 0.00847361452619633,
+          "eligible_call_rate": 0.12741751990898748
+        },
+        "512": {
+          "calls": 97,
+          "all_call_rate": 0.0036693777189332325,
+          "eligible_call_rate": 0.055176336746302616
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.02457044008839688,
+        "high": 0.030729129013796576
+      },
+      "selected_candidates": 2430,
+      "compatible_candidates": 2426,
+      "mean_selected_candidates": 0.09192358615471913,
+      "any_prior_oracle_capture": 0.27878390261586883,
+      "same_category_oracle_capture": 0.42598105081165627,
+      "same_signature_oracle_capture": 0.47700394500178145
+    },
+    "8": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 222239,
+      "reuse_ratio": 0.027601407747679472,
+      "eligible_calls": 1758,
+      "eligible_output_tokens": 522560,
+      "eligible_reuse_ratio": 0.425288962033068,
+      "positive_lcp_calls": 1373,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 8.406998297711368,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "p95": 7.0,
+        "p99": 220.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.025371544044484884,
+        "p25": 0.0021334192868524334,
+        "median": 0.012664052572169973,
+        "p75": 0.03411906892881095,
+        "p90": 0.06580945156576112,
+        "p95": 0.09178365836826723,
+        "p99": 0.15293128464179695
+      },
+      "thresholds": {
+        "1": {
+          "calls": 1373,
+          "all_call_rate": 0.05193871760923019,
+          "eligible_call_rate": 0.7810011376564278
+        },
+        "8": {
+          "calls": 1318,
+          "all_call_rate": 0.04985814261395877,
+          "eligible_call_rate": 0.7497155858930603
+        },
+        "32": {
+          "calls": 1020,
+          "all_call_rate": 0.03858520900321544,
+          "eligible_call_rate": 0.5802047781569966
+        },
+        "64": {
+          "calls": 738,
+          "all_call_rate": 0.027917533572914696,
+          "eligible_call_rate": 0.4197952218430034
+        },
+        "128": {
+          "calls": 470,
+          "all_call_rate": 0.01777945905050123,
+          "eligible_call_rate": 0.267349260523322
+        },
+        "256": {
+          "calls": 224,
+          "all_call_rate": 0.00847361452619633,
+          "eligible_call_rate": 0.12741751990898748
+        },
+        "512": {
+          "calls": 97,
+          "all_call_rate": 0.0036693777189332325,
+          "eligible_call_rate": 0.055176336746302616
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.02457044008839688,
+        "high": 0.030729129013796576
+      },
+      "selected_candidates": 2484,
+      "compatible_candidates": 2480,
+      "mean_selected_candidates": 0.09396633251371288,
+      "any_prior_oracle_capture": 0.27878390261586883,
+      "same_category_oracle_capture": 0.42598105081165627,
+      "same_signature_oracle_capture": 0.47700394500178145
+    }
+  },
+  "signature_recent": {
+    "1": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 254388,
+      "reuse_ratio": 0.031594215750235945,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.06460578706208087,
+      "positive_lcp_calls": 4880,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 9.623151125401929,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 5.0,
+        "p95": 47.0,
+        "p99": 229.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.19034267912772584,
+        "mean": 0.03008393374721428,
+        "p25": 0.010104567898608103,
+        "median": 0.0219109880607625,
+        "p75": 0.040883276127575974,
+        "p90": 0.06607138821363764,
+        "p95": 0.08573561165691224,
+        "p99": 0.14155135583441605
+      },
+      "thresholds": {
+        "1": {
+          "calls": 4880,
+          "all_call_rate": 0.1846037450349915,
+          "eligible_call_rate": 0.33830155979202775
+        },
+        "8": {
+          "calls": 2477,
+          "all_call_rate": 0.09370153205976925,
+          "eligible_call_rate": 0.1717157712305026
+        },
+        "32": {
+          "calls": 1618,
+          "all_call_rate": 0.06120673349725742,
+          "eligible_call_rate": 0.11216637781629116
+        },
+        "64": {
+          "calls": 1030,
+          "all_call_rate": 0.03896349536599206,
+          "eligible_call_rate": 0.07140381282495667
+        },
+        "128": {
+          "calls": 560,
+          "all_call_rate": 0.021184036315490828,
+          "eligible_call_rate": 0.038821490467937605
+        },
+        "256": {
+          "calls": 231,
+          "all_call_rate": 0.008738414980139966,
+          "eligible_call_rate": 0.016013864818024262
+        },
+        "512": {
+          "calls": 52,
+          "all_call_rate": 0.001967089086438434,
+          "eligible_call_rate": 0.003604852686308492
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.028912635985521844,
+        "high": 0.034337814895925925
+      },
+      "selected_candidates": 14425,
+      "compatible_candidates": 14077,
+      "mean_selected_candidates": 0.5456780783052771,
+      "any_prior_oracle_capture": 0.3191126643777449,
+      "same_category_oracle_capture": 0.48501948396717726,
+      "same_signature_oracle_capture": 0.5460071344863556
+    },
+    "2": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 328859,
+      "reuse_ratio": 0.040843287409024175,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.08351885516395761,
+      "positive_lcp_calls": 5978,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 12.44028749763571,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 12.0,
+        "p95": 59.0,
+        "p99": 284.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.039365583242146535,
+        "p25": 0.013408938269939063,
+        "median": 0.02910411707804094,
+        "p75": 0.054885191709985556,
+        "p90": 0.08551529517920005,
+        "p95": 0.1082337111977897,
+        "p99": 0.16346255739105173
+      },
+      "thresholds": {
+        "1": {
+          "calls": 5978,
+          "all_call_rate": 0.22613958766786457,
+          "eligible_call_rate": 0.414419410745234
+        },
+        "8": {
+          "calls": 2945,
+          "all_call_rate": 0.11140533383771516,
+          "eligible_call_rate": 0.20415944540727904
+        },
+        "32": {
+          "calls": 1923,
+          "all_call_rate": 0.07274446756194439,
+          "eligible_call_rate": 0.1333102253032929
+        },
+        "64": {
+          "calls": 1259,
+          "all_call_rate": 0.0476262530735767,
+          "eligible_call_rate": 0.0872790294627383
+        },
+        "128": {
+          "calls": 707,
+          "all_call_rate": 0.026744845848307167,
+          "eligible_call_rate": 0.04901213171577123
+        },
+        "256": {
+          "calls": 310,
+          "all_call_rate": 0.011726877246075278,
+          "eligible_call_rate": 0.02149046793760832
+        },
+        "512": {
+          "calls": 81,
+          "all_call_rate": 0.0030641195384906376,
+          "eligible_call_rate": 0.0056152512998266894
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.03769889082895239,
+        "high": 0.04420922769265832
+      },
+      "selected_candidates": 24632,
+      "compatible_candidates": 23991,
+      "mean_selected_candidates": 0.931794968791375,
+      "any_prior_oracle_capture": 0.41253153330581943,
+      "same_category_oracle_capture": 0.6271498971652888,
+      "same_signature_oracle_capture": 0.7058483900185875
+    },
+    "4": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 400115,
+      "reuse_ratio": 0.049693065847860964,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.10161542403865152,
+      "positive_lcp_calls": 6830,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 15.135804804236807,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 1.0,
+        "p90": 16.0,
+        "p95": 71.0,
+        "p99": 340.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.04769523774094616,
+        "p25": 0.01659745325295985,
+        "median": 0.03413851681207458,
+        "p75": 0.06581012312534831,
+        "p90": 0.10436830519911758,
+        "p95": 0.12921766294785408,
+        "p99": 0.1913074534414948
+      },
+      "thresholds": {
+        "1": {
+          "calls": 6830,
+          "all_call_rate": 0.25836958577643276,
+          "eligible_call_rate": 0.4734835355285962
+        },
+        "8": {
+          "calls": 3328,
+          "all_call_rate": 0.12589370153205978,
+          "eligible_call_rate": 0.2307105719237435
+        },
+        "32": {
+          "calls": 2161,
+          "all_call_rate": 0.081747682996028,
+          "eligible_call_rate": 0.1498093587521664
+        },
+        "64": {
+          "calls": 1443,
+          "all_call_rate": 0.05458672214866654,
+          "eligible_call_rate": 0.10003466204506066
+        },
+        "128": {
+          "calls": 840,
+          "all_call_rate": 0.03177605447323624,
+          "eligible_call_rate": 0.058232235701906415
+        },
+        "256": {
+          "calls": 391,
+          "all_call_rate": 0.014790996784565916,
+          "eligible_call_rate": 0.02710571923743501
+        },
+        "512": {
+          "calls": 120,
+          "all_call_rate": 0.004539436353319463,
+          "eligible_call_rate": 0.008318890814558059
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.04570860704395177,
+        "high": 0.05359852294142559
+      },
+      "selected_candidates": 39361,
+      "compatible_candidates": 38306,
+      "mean_selected_candidates": 1.4889729525250615,
+      "any_prior_oracle_capture": 0.5019174006144212,
+      "same_category_oracle_capture": 0.7628303792712824,
+      "same_signature_oracle_capture": 0.8587891119667915
+    },
+    "8": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 442922,
+      "reuse_ratio": 0.055009565028719926,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.112486927123571,
+      "positive_lcp_calls": 7359,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 16.75513523737469,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 1.0,
+        "p90": 20.0,
+        "p95": 81.0,
+        "p99": 371.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.05211214740244229,
+        "p25": 0.018565803622838696,
+        "median": 0.038030863857168036,
+        "p75": 0.07150696577774837,
+        "p90": 0.11435783339225623,
+        "p95": 0.14709286023207513,
+        "p99": 0.19134275977586654
+      },
+      "thresholds": {
+        "1": {
+          "calls": 7359,
+          "all_call_rate": 0.27838093436731604,
+          "eligible_call_rate": 0.510155979202773
+        },
+        "8": {
+          "calls": 3569,
+          "all_call_rate": 0.13501040287497637,
+          "eligible_call_rate": 0.24741767764298095
+        },
+        "32": {
+          "calls": 2304,
+          "all_call_rate": 0.08715717798373368,
+          "eligible_call_rate": 0.15972270363951474
+        },
+        "64": {
+          "calls": 1565,
+          "all_call_rate": 0.059201815774541325,
+          "eligible_call_rate": 0.10849220103986135
+        },
+        "128": {
+          "calls": 925,
+          "all_call_rate": 0.03499148855683753,
+          "eligible_call_rate": 0.06412478336221837
+        },
+        "256": {
+          "calls": 436,
+          "all_call_rate": 0.016493285417060716,
+          "eligible_call_rate": 0.03022530329289428
+        },
+        "512": {
+          "calls": 144,
+          "all_call_rate": 0.005447323623983355,
+          "eligible_call_rate": 0.009982668977469671
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.05097140210095945,
+        "high": 0.059028316255565934
+      },
+      "selected_candidates": 56710,
+      "compatible_candidates": 55215,
+      "mean_selected_candidates": 2.145261963306223,
+      "any_prior_oracle_capture": 0.5556159077138839,
+      "same_category_oracle_capture": 0.8447857146964507,
+      "same_signature_oracle_capture": 0.9506681605302357
+    }
+  },
+  "resource_aware_recent": {
+    "1": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 341173,
+      "reuse_ratio": 0.04237264874976511,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.08664618688511767,
+      "positive_lcp_calls": 5118,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 12.906109324758843,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 9.0,
+        "p95": 55.0,
+        "p99": 303.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.04026039470386038,
+        "p25": 0.012853352248844051,
+        "median": 0.02771676722137767,
+        "p75": 0.0535952640304876,
+        "p90": 0.09312969654990134,
+        "p95": 0.12228232246713626,
+        "p99": 0.17595781505564487
+      },
+      "thresholds": {
+        "1": {
+          "calls": 5118,
+          "all_call_rate": 0.19360696046907508,
+          "eligible_call_rate": 0.3548006932409012
+        },
+        "8": {
+          "calls": 2718,
+          "all_call_rate": 0.10281823340268584,
+          "eligible_call_rate": 0.18842287694974003
+        },
+        "32": {
+          "calls": 1833,
+          "all_call_rate": 0.0693398902969548,
+          "eligible_call_rate": 0.12707105719237435
+        },
+        "64": {
+          "calls": 1209,
+          "all_call_rate": 0.04573482125969359,
+          "eligible_call_rate": 0.08381282495667244
+        },
+        "128": {
+          "calls": 711,
+          "all_call_rate": 0.026896160393417818,
+          "eligible_call_rate": 0.0492894280762565
+        },
+        "256": {
+          "calls": 328,
+          "all_call_rate": 0.012407792699073198,
+          "eligible_call_rate": 0.022738301559792028
+        },
+        "512": {
+          "calls": 105,
+          "all_call_rate": 0.00397200680915453,
+          "eligible_call_rate": 0.007279029462738302
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.03900606849380535,
+        "high": 0.045873889866242384
+      },
+      "selected_candidates": 14425,
+      "compatible_candidates": 14091,
+      "mean_selected_candidates": 0.5456780783052771,
+      "any_prior_oracle_capture": 0.427978619446469,
+      "same_category_oracle_capture": 0.6516308837651497,
+      "same_signature_oracle_capture": 0.7322786141410499
+    },
+    "2": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 396484,
+      "reuse_ratio": 0.049242106693383914,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.10069327514474766,
+      "positive_lcp_calls": 6108,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 14.998449025912615,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 0.0,
+        "p90": 15.0,
+        "p95": 70.0,
+        "p99": 341.3199999999997
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.04659248767211906,
+        "p25": 0.015725081924424657,
+        "median": 0.03356905100287007,
+        "p75": 0.0647833806290953,
+        "p90": 0.10570359776527423,
+        "p95": 0.132864895908492,
+        "p99": 0.1859923907025837
+      },
+      "thresholds": {
+        "1": {
+          "calls": 6108,
+          "all_call_rate": 0.23105731038396066,
+          "eligible_call_rate": 0.4234315424610052
+        },
+        "8": {
+          "calls": 3123,
+          "all_call_rate": 0.11813883109513902,
+          "eligible_call_rate": 0.21649913344887348
+        },
+        "32": {
+          "calls": 2090,
+          "all_call_rate": 0.07906184982031397,
+          "eligible_call_rate": 0.14488734835355285
+        },
+        "64": {
+          "calls": 1414,
+          "all_call_rate": 0.053489691696614335,
+          "eligible_call_rate": 0.09802426343154245
+        },
+        "128": {
+          "calls": 843,
+          "all_call_rate": 0.031889540382069224,
+          "eligible_call_rate": 0.05844020797227036
+        },
+        "256": {
+          "calls": 396,
+          "all_call_rate": 0.014980139965954228,
+          "eligible_call_rate": 0.027452339688041595
+        },
+        "512": {
+          "calls": 121,
+          "all_call_rate": 0.004577264989597125,
+          "eligible_call_rate": 0.008388214904679376
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.045400646584979165,
+        "high": 0.05313313155942173
+      },
+      "selected_candidates": 24632,
+      "compatible_candidates": 23999,
+      "mean_selected_candidates": 0.931794968791375,
+      "any_prior_oracle_capture": 0.49736255492847853,
+      "same_category_oracle_capture": 0.7568213052820432,
+      "same_signature_oracle_capture": 0.8509956944104605
+    },
+    "4": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 436970,
+      "reuse_ratio": 0.054270344734738275,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.11097532419971648,
+      "positive_lcp_calls": 6906,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 16.529979194250046,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 1.0,
+        "p90": 19.0,
+        "p95": 79.0,
+        "p99": 372.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.05106403841911583,
+        "p25": 0.01772467287927374,
+        "median": 0.03737509801481706,
+        "p75": 0.07069779618032507,
+        "p90": 0.11186448175461994,
+        "p95": 0.14273535741984872,
+        "p99": 0.1913074534414948
+      },
+      "thresholds": {
+        "1": {
+          "calls": 6906,
+          "all_call_rate": 0.2612445621335351,
+          "eligible_call_rate": 0.4787521663778163
+        },
+        "8": {
+          "calls": 3445,
+          "all_call_rate": 0.13031965197654624,
+          "eligible_call_rate": 0.2388214904679376
+        },
+        "32": {
+          "calls": 2270,
+          "all_call_rate": 0.08587100435029317,
+          "eligible_call_rate": 0.15736568457538994
+        },
+        "64": {
+          "calls": 1544,
+          "all_call_rate": 0.05840741441271042,
+          "eligible_call_rate": 0.1070363951473137
+        },
+        "128": {
+          "calls": 925,
+          "all_call_rate": 0.03499148855683753,
+          "eligible_call_rate": 0.06412478336221837
+        },
+        "256": {
+          "calls": 441,
+          "all_call_rate": 0.016682428598449026,
+          "eligible_call_rate": 0.030571923743500866
+        },
+        "512": {
+          "calls": 141,
+          "all_call_rate": 0.005333837715150369,
+          "eligible_call_rate": 0.009774696707105719
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.05021716583695975,
+        "high": 0.058321375191606746
+      },
+      "selected_candidates": 39361,
+      "compatible_candidates": 38304,
+      "mean_selected_candidates": 1.4889729525250615,
+      "any_prior_oracle_capture": 0.5481495233782379,
+      "same_category_oracle_capture": 0.8334729380825783,
+      "same_signature_oracle_capture": 0.9378930513880482
+    },
+    "8": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 459808,
+      "reuse_ratio": 0.05710675486141048,
+      "eligible_calls": 14425,
+      "eligible_output_tokens": 3937542,
+      "eligible_reuse_ratio": 0.11677538931648221,
+      "positive_lcp_calls": 7365,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2256,
+        "mean": 17.393909589559296,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 1.0,
+        "p90": 21.0,
+        "p95": 88.0,
+        "p99": 381.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3812305295950156,
+        "mean": 0.05317085101247467,
+        "p25": 0.01888243455373911,
+        "median": 0.03924580244270301,
+        "p75": 0.07356179789314526,
+        "p90": 0.11555535492078332,
+        "p95": 0.14709286023207513,
+        "p99": 0.19134275977586654
+      },
+      "thresholds": {
+        "1": {
+          "calls": 7365,
+          "all_call_rate": 0.27860790618498205,
+          "eligible_call_rate": 0.5105719237435009
+        },
+        "8": {
+          "calls": 3628,
+          "all_call_rate": 0.13724229241535843,
+          "eligible_call_rate": 0.25150779896013864
+        },
+        "32": {
+          "calls": 2359,
+          "all_call_rate": 0.0892377529790051,
+          "eligible_call_rate": 0.16353552859618717
+        },
+        "64": {
+          "calls": 1617,
+          "all_call_rate": 0.06116890486097976,
+          "eligible_call_rate": 0.11209705372616985
+        },
+        "128": {
+          "calls": 971,
+          "all_call_rate": 0.036731605825609984,
+          "eligible_call_rate": 0.06731369150779896
+        },
+        "256": {
+          "calls": 462,
+          "all_call_rate": 0.01747682996027993,
+          "eligible_call_rate": 0.032027729636048524
+        },
+        "512": {
+          "calls": 153,
+          "all_call_rate": 0.005787781350482315,
+          "eligible_call_rate": 0.010606585788561525
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.05297324134573298,
+        "high": 0.06103667307625915
+      },
+      "selected_candidates": 56710,
+      "compatible_candidates": 55215,
+      "mean_selected_candidates": 2.145261963306223,
+      "any_prior_oracle_capture": 0.5767982608542939,
+      "same_category_oracle_capture": 0.8771522931278045,
+      "same_signature_oracle_capture": 0.9869115229252252
+    }
+  },
+  "command_similarity": {
+    "1": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 536060,
+      "reuse_ratio": 0.06657702130238644,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.06754975566358946,
+      "positive_lcp_calls": 7421,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 20.278418763003593,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 1.0,
+        "p90": 38.0,
+        "p95": 104.0,
+        "p99": 403.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.3820093457943925,
+        "mean": 0.063970602080099,
+        "p25": 0.03130510407632243,
+        "median": 0.052172275978472266,
+        "p75": 0.08446887359283388,
+        "p90": 0.12354285134009385,
+        "p95": 0.15632001815119345,
+        "p99": 0.2300625138329654
+      },
+      "thresholds": {
+        "1": {
+          "calls": 7421,
+          "all_call_rate": 0.2807263098165311,
+          "eligible_call_rate": 0.2861384229805282
+        },
+        "8": {
+          "calls": 4170,
+          "all_call_rate": 0.15774541327785133,
+          "eligible_call_rate": 0.1607865818392134
+        },
+        "32": {
+          "calls": 2829,
+          "all_call_rate": 0.10701721202950634,
+          "eligible_call_rate": 0.1090803932909196
+        },
+        "64": {
+          "calls": 1876,
+          "all_call_rate": 0.07096652165689427,
+          "eligible_call_rate": 0.07233468286099864
+        },
+        "128": {
+          "calls": 1170,
+          "all_call_rate": 0.04425950444486476,
+          "eligible_call_rate": 0.045112781954887216
+        },
+        "256": {
+          "calls": 532,
+          "all_call_rate": 0.020124834499716287,
+          "eligible_call_rate": 0.020512820512820513
+        },
+        "512": {
+          "calls": 172,
+          "all_call_rate": 0.006506525439757897,
+          "eligible_call_rate": 0.006631964526701369
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.06246599812035797,
+        "high": 0.0708135004943667
+      },
+      "selected_candidates": 25935,
+      "compatible_candidates": 24944,
+      "mean_selected_candidates": 0.981085681861169,
+      "any_prior_oracle_capture": 0.6724512746919427,
+      "same_category_oracle_capture": 0.7594281124990656,
+      "same_signature_oracle_capture": 0.7649440015797178
+    },
+    "2": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 621192,
+      "reuse_ratio": 0.07715015673035114,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.0782773716005232,
+      "positive_lcp_calls": 9166,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 23.498846226593532,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 2.0,
+        "p90": 47.0,
+        "p95": 130.0,
+        "p99": 440.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.4752339020363236,
+        "mean": 0.07414588577753126,
+        "p25": 0.03833648945053046,
+        "median": 0.062380568159266105,
+        "p75": 0.09681531491025891,
+        "p90": 0.14015819584642009,
+        "p95": 0.16767768956018797,
+        "p99": 0.24902254041226843
+      },
+      "thresholds": {
+        "1": {
+          "calls": 9166,
+          "all_call_rate": 0.34673728012105165,
+          "eligible_call_rate": 0.3534220165799113
+        },
+        "8": {
+          "calls": 4946,
+          "all_call_rate": 0.1871004350293172,
+          "eligible_call_rate": 0.19070753807595914
+        },
+        "32": {
+          "calls": 3310,
+          "all_call_rate": 0.12521278607906186,
+          "eligible_call_rate": 0.12762675920570657
+        },
+        "64": {
+          "calls": 2188,
+          "all_call_rate": 0.08276905617552487,
+          "eligible_call_rate": 0.08436475804896858
+        },
+        "128": {
+          "calls": 1342,
+          "all_call_rate": 0.05076602988462266,
+          "eligible_call_rate": 0.05174474648158859
+        },
+        "256": {
+          "calls": 628,
+          "all_call_rate": 0.023756383582371855,
+          "eligible_call_rate": 0.02421438210911895
+        },
+        "512": {
+          "calls": 197,
+          "all_call_rate": 0.007452241346699451,
+          "eligible_call_rate": 0.007595912859070754
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.07268927923990902,
+        "high": 0.0816944004486091
+      },
+      "selected_candidates": 51364,
+      "compatible_candidates": 49407,
+      "mean_selected_candidates": 1.9430300737658408,
+      "any_prior_oracle_capture": 0.7792436522561602,
+      "same_category_oracle_capture": 0.8727513891790666,
+      "same_signature_oracle_capture": 0.8764321558425948
+    },
+    "4": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 683145,
+      "reuse_ratio": 0.08484453086896761,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.08608416563967247,
+      "positive_lcp_calls": 10570,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 25.842443729903536,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 3.0,
+        "p90": 52.599999999998545,
+        "p95": 147.0,
+        "p99": 466.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.4752339020363236,
+        "mean": 0.08155091266226963,
+        "p25": 0.04302444901252723,
+        "median": 0.06968748224310875,
+        "p75": 0.10784615876824079,
+        "p90": 0.1539002354119708,
+        "p95": 0.18046005732699438,
+        "p99": 0.2727966600355799
+      },
+      "thresholds": {
+        "1": {
+          "calls": 10570,
+          "all_call_rate": 0.39984868545488933,
+          "eligible_call_rate": 0.407557354925776
+        },
+        "8": {
+          "calls": 5540,
+          "all_call_rate": 0.20957064497824854,
+          "eligible_call_rate": 0.21361095045305573
+        },
+        "32": {
+          "calls": 3596,
+          "all_call_rate": 0.13603177605447322,
+          "eligible_call_rate": 0.13865432812801234
+        },
+        "64": {
+          "calls": 2375,
+          "all_call_rate": 0.0898430111594477,
+          "eligible_call_rate": 0.09157509157509157
+        },
+        "128": {
+          "calls": 1466,
+          "all_call_rate": 0.05545678078305277,
+          "eligible_call_rate": 0.05652593021014073
+        },
+        "256": {
+          "calls": 700,
+          "all_call_rate": 0.026480045394363532,
+          "eligible_call_rate": 0.02699055330634278
+        },
+        "512": {
+          "calls": 223,
+          "all_call_rate": 0.008435785889918668,
+          "eligible_call_rate": 0.008598419124734915
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.07978201399829452,
+        "high": 0.08946821962394282
+      },
+      "selected_candidates": 100720,
+      "compatible_candidates": 96935,
+      "mean_selected_candidates": 3.8101002458861357,
+      "any_prior_oracle_capture": 0.8569595307417587,
+      "same_category_oracle_capture": 0.9465355340408771,
+      "same_signature_oracle_capture": 0.949474786759561
+    },
+    "8": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 733334,
+      "reuse_ratio": 0.09107785199373998,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.09240855971309689,
+      "positive_lcp_calls": 11631,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 27.741025156043126,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 5.0,
+        "p90": 59.0,
+        "p95": 163.0,
+        "p99": 486.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0026366251198465963,
+        "max": 0.50357732526142,
+        "mean": 0.088594808396166,
+        "p25": 0.04830255010392347,
+        "median": 0.07763262597698756,
+        "p75": 0.11300834432394397,
+        "p90": 0.16123481177617063,
+        "p95": 0.18747396694707438,
+        "p99": 0.28151095464781944
+      },
+      "thresholds": {
+        "1": {
+          "calls": 11631,
+          "all_call_rate": 0.43998486854548896,
+          "eligible_call_rate": 0.4484673221515327
+        },
+        "8": {
+          "calls": 5951,
+          "all_call_rate": 0.2251182144883677,
+          "eligible_call_rate": 0.2294582610372084
+        },
+        "32": {
+          "calls": 3800,
+          "all_call_rate": 0.1437488178551163,
+          "eligible_call_rate": 0.14652014652014653
+        },
+        "64": {
+          "calls": 2544,
+          "all_call_rate": 0.09623605069037261,
+          "eligible_call_rate": 0.09809138230190861
+        },
+        "128": {
+          "calls": 1594,
+          "all_call_rate": 0.06029884622659353,
+          "eligible_call_rate": 0.06146134567187199
+        },
+        "256": {
+          "calls": 748,
+          "all_call_rate": 0.02829581993569132,
+          "eligible_call_rate": 0.028841334104491998
+        },
+        "512": {
+          "calls": 241,
+          "all_call_rate": 0.009116701342916587,
+          "eligible_call_rate": 0.009292461924040872
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.08610898389033793,
+        "high": 0.09592904092424613
+      },
+      "selected_candidates": 193307,
+      "compatible_candidates": 186374,
+      "mean_selected_candidates": 7.312540192926045,
+      "any_prior_oracle_capture": 0.9199182611553578,
+      "same_category_oracle_capture": 0.9856798112364892,
+      "same_signature_oracle_capture": 0.9857761007585221
+    }
+  },
+  "combined": {
+    "1": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 526496,
+      "reuse_ratio": 0.06538920159612963,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.06634458112498079,
+      "positive_lcp_calls": 7356,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 19.916625685644032,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 1.0,
+        "p90": 34.0,
+        "p95": 101.0,
+        "p99": 396.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.41111722619702806,
+        "mean": 0.06309397918151217,
+        "p25": 0.029844841315046347,
+        "median": 0.05064267151680568,
+        "p75": 0.08407676487706446,
+        "p90": 0.12374661428719115,
+        "p95": 0.15692865120551788,
+        "p99": 0.21047707148786324
+      },
+      "thresholds": {
+        "1": {
+          "calls": 7356,
+          "all_call_rate": 0.27826744845848306,
+          "eligible_call_rate": 0.2836321573163678
+        },
+        "8": {
+          "calls": 4061,
+          "all_call_rate": 0.15362209192358617,
+          "eligible_call_rate": 0.1565837671100829
+        },
+        "32": {
+          "calls": 2748,
+          "all_call_rate": 0.1039530924910157,
+          "eligible_call_rate": 0.1059572006940428
+        },
+        "64": {
+          "calls": 1820,
+          "all_call_rate": 0.06884811802534518,
+          "eligible_call_rate": 0.07017543859649122
+        },
+        "128": {
+          "calls": 1151,
+          "all_call_rate": 0.04354076035558918,
+          "eligible_call_rate": 0.044380181222286486
+        },
+        "256": {
+          "calls": 527,
+          "all_call_rate": 0.019935691318327974,
+          "eligible_call_rate": 0.020320030846346634
+        },
+        "512": {
+          "calls": 169,
+          "all_call_rate": 0.0063930395309249105,
+          "eligible_call_rate": 0.006516290726817042
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.06103737230708236,
+        "high": 0.0698324124157376
+      },
+      "selected_candidates": 25935,
+      "compatible_candidates": 24802,
+      "mean_selected_candidates": 0.981085681861169,
+      "any_prior_oracle_capture": 0.6604538788945435,
+      "same_category_oracle_capture": 0.7719465374508109,
+      "same_signature_oracle_capture": 0.7919236927620593
+    },
+    "2": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 607084,
+      "reuse_ratio": 0.07539798604696855,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.07649960054336184,
+      "positive_lcp_calls": 9057,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 22.965159825988273,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 2.0,
+        "p90": 47.0,
+        "p95": 125.0,
+        "p99": 435.0
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.4752339020363236,
+        "mean": 0.07249851690560444,
+        "p25": 0.0369939322012521,
+        "median": 0.06161424306577794,
+        "p75": 0.09491439311149094,
+        "p90": 0.1398996076028557,
+        "p95": 0.16695890015287398,
+        "p99": 0.23119723907925935
+      },
+      "thresholds": {
+        "1": {
+          "calls": 9057,
+          "all_call_rate": 0.34261395876678646,
+          "eligible_call_rate": 0.3492192018507808
+        },
+        "8": {
+          "calls": 4844,
+          "all_call_rate": 0.18324191412899565,
+          "eligible_call_rate": 0.18677462887989205
+        },
+        "32": {
+          "calls": 3222,
+          "all_call_rate": 0.12188386608662757,
+          "eligible_call_rate": 0.12423366107576633
+        },
+        "64": {
+          "calls": 2124,
+          "all_call_rate": 0.0803480234537545,
+          "eligible_call_rate": 0.08189705031810295
+        },
+        "128": {
+          "calls": 1306,
+          "all_call_rate": 0.04940419897862682,
+          "eligible_call_rate": 0.050356660882976675
+        },
+        "256": {
+          "calls": 612,
+          "all_call_rate": 0.02315112540192926,
+          "eligible_call_rate": 0.023597455176402545
+        },
+        "512": {
+          "calls": 194,
+          "all_call_rate": 0.007338755437866465,
+          "eligible_call_rate": 0.007480239059186428
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.0707458955910001,
+        "high": 0.08003932222753632
+      },
+      "selected_candidates": 51364,
+      "compatible_candidates": 49118,
+      "mean_selected_candidates": 1.9430300737658408,
+      "any_prior_oracle_capture": 0.7615461135788593,
+      "same_category_oracle_capture": 0.8721821084853492,
+      "same_signature_oracle_capture": 0.8867325168596241
+    },
+    "4": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 678543,
+      "reuse_ratio": 0.08427297646827817,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.08550426045076855,
+      "positive_lcp_calls": 10543,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 25.668356345753736,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 3.0,
+        "p90": 51.0,
+        "p95": 145.0,
+        "p99": 466.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0,
+        "max": 0.4752339020363236,
+        "mean": 0.08092640035428872,
+        "p25": 0.04217004141288906,
+        "median": 0.06932327133271862,
+        "p75": 0.10444414426028903,
+        "p90": 0.15166862068620748,
+        "p95": 0.17749082273093109,
+        "p99": 0.2808877905689273
+      },
+      "thresholds": {
+        "1": {
+          "calls": 10543,
+          "all_call_rate": 0.3988273122753925,
+          "eligible_call_rate": 0.40651629072681705
+        },
+        "8": {
+          "calls": 5513,
+          "all_call_rate": 0.20854927179875166,
+          "eligible_call_rate": 0.21256988625409678
+        },
+        "32": {
+          "calls": 3570,
+          "all_call_rate": 0.13504823151125403,
+          "eligible_call_rate": 0.13765182186234817
+        },
+        "64": {
+          "calls": 2342,
+          "all_call_rate": 0.08859466616228485,
+          "eligible_call_rate": 0.09030267977636398
+        },
+        "128": {
+          "calls": 1452,
+          "all_call_rate": 0.0549271798751655,
+          "eligible_call_rate": 0.05598611914401388
+        },
+        "256": {
+          "calls": 691,
+          "all_call_rate": 0.026139587667864575,
+          "eligible_call_rate": 0.0266435319066898
+        },
+        "512": {
+          "calls": 223,
+          "all_call_rate": 0.008435785889918668,
+          "eligible_call_rate": 0.008598419124734915
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.07940110372243277,
+        "high": 0.08893290289992117
+      },
+      "selected_candidates": 100720,
+      "compatible_candidates": 96519,
+      "mean_selected_candidates": 3.8101002458861357,
+      "any_prior_oracle_capture": 0.8511866307564355,
+      "same_category_oracle_capture": 0.9498956318728184,
+      "same_signature_oracle_capture": 0.9551905319957245
+    },
+    "8": {
+      "output_tokens": 8051727,
+      "reusable_tokens": 732045,
+      "reuse_ratio": 0.09091776211488542,
+      "eligible_calls": 25935,
+      "eligible_output_tokens": 7935780,
+      "eligible_reuse_ratio": 0.09224613081511836,
+      "positive_lcp_calls": 11612,
+      "lcp_tokens": {
+        "count": 26435,
+        "min": 0,
+        "max": 2702,
+        "mean": 27.692264043881217,
+        "p25": 0.0,
+        "median": 0,
+        "p75": 5.0,
+        "p90": 59.0,
+        "p95": 162.0,
+        "p99": 488.65999999999985
+      },
+      "trajectory_reuse_ratio": {
+        "count": 500,
+        "min": 0.0026366251198465963,
+        "max": 0.50357732526142,
+        "mean": 0.08834705608188137,
+        "p25": 0.04863634032518744,
+        "median": 0.07608963138738892,
+        "p75": 0.11307743626078244,
+        "p90": 0.16017465752531085,
+        "p95": 0.18686026034925096,
+        "p99": 0.2815619783934857
+      },
+      "thresholds": {
+        "1": {
+          "calls": 11612,
+          "all_call_rate": 0.4392661244562134,
+          "eligible_call_rate": 0.44773472141893195
+        },
+        "8": {
+          "calls": 5947,
+          "all_call_rate": 0.22496689994325705,
+          "eligible_call_rate": 0.2293040293040293
+        },
+        "32": {
+          "calls": 3793,
+          "all_call_rate": 0.1434840174011727,
+          "eligible_call_rate": 0.14625024098708309
+        },
+        "64": {
+          "calls": 2535,
+          "all_call_rate": 0.09589559296387365,
+          "eligible_call_rate": 0.09774436090225563
+        },
+        "128": {
+          "calls": 1589,
+          "all_call_rate": 0.06010970304520522,
+          "eligible_call_rate": 0.06126855600539811
+        },
+        "256": {
+          "calls": 747,
+          "all_call_rate": 0.028257991299413657,
+          "eligible_call_rate": 0.028802776171197225
+        },
+        "512": {
+          "calls": 242,
+          "all_call_rate": 0.00915452997919425,
+          "eligible_call_rate": 0.009331019857335646
+        }
+      },
+      "reuse_ratio_ci95": {
+        "low": 0.08611195380164752,
+        "high": 0.09571614560153655
+      },
+      "selected_candidates": 193307,
+      "compatible_candidates": 185911,
+      "mean_selected_candidates": 7.312540192926045,
+      "any_prior_oracle_capture": 0.9183012972090123,
+      "same_category_oracle_capture": 0.9861436695795182,
+      "same_signature_oracle_capture": 0.987956798152417
+    }
+  }
+}
