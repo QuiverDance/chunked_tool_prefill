@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "trace_id": "analysisbench_minisweagent_toolcall_full_20260709T131115Z",
+  "benchmark": "analysisbench",
+  "subset": "full",
+  "split": "all",
+  "model": "openai/nvidia/GLM-5.2-NVFP4",
+  "served_model_name": "nvidia/GLM-5.2-NVFP4",
+  "source_run": "/home/pjw7200/analysisbench-minisweagent/software-analysis-agents-main/analysis-minisweagent/batch_results_toolcall_full_20260709T131115Z",
+  "file_count": 40,
+  "trajectory_count": 35,
+  "slices": [
+    {
+      "label": "gpu0",
+      "slice": "0:35",
+      "api_base": "http://127.0.0.1:30001/v1"
+    }
+  ],
+  "evaluation": {
+    "path": "evaluation/analysisbench_batch_results_latest.json",
+    "total_instances": 35,
+    "submitted_instances": 35,
+    "successful_instances": 35,
+    "failed_instances": 0,
+    "timed_out_instances": 0
+  },
+  "notes": [
+    "Copied from the AnalysisBench Mini SWE-Agent tool-call full run.",
+    "Trajectories are stored as gpu0/<instance_id>/<instance_id>.traj.json to match the chunked_tool_prefill trace layout."
+  ]
+}

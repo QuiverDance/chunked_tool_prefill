@@ -1,0 +1,113 @@
+2026-07-09 13:11:15,642 - INFO - Starting batch execution of 35 instances
+2026-07-09 13:11:15,642 - INFO - Parallelism: 2 workers
+2026-07-09 13:11:15,642 - INFO - Timeout: 7200s per instance
+2026-07-09 13:11:15,642 - INFO - Output directory: batch_results_toolcall_full_20260709T131115Z
+2026-07-09 13:11:15,648 - INFO - Submitted 35 instances to executor
+2026-07-09 13:11:15,652 - INFO - [AFLplusplus_fastfetch] Starting: AFLplusplus on fastfetch
+2026-07-09 13:11:15,652 - INFO - [AFLplusplus_curl] Starting: AFLplusplus on curl
+2026-07-09 13:22:20,532 - INFO - [AFLplusplus_fastfetch] ✓ Completed successfully in 664.88s
+2026-07-09 13:22:20,534 - INFO - [AFLplusplus_ImageMagick] Starting: AFLplusplus on ImageMagick
+2026-07-09 13:22:20,535 - INFO - Progress: 1/35 (2.9%) completed
+2026-07-09 13:22:31,339 - INFO - [AFLplusplus_curl] ✓ Completed successfully in 675.68s
+2026-07-09 13:22:31,340 - INFO - [AFLplusplus_masscan] Starting: AFLplusplus on masscan
+2026-07-09 13:22:31,341 - INFO - Progress: 2/35 (5.7%) completed
+2026-07-09 13:28:21,253 - INFO - [AFLplusplus_masscan] ✓ Completed successfully in 349.91s
+2026-07-09 13:28:21,254 - INFO - [AFLplusplus_radare2] Starting: AFLplusplus on radare2
+2026-07-09 13:28:21,255 - INFO - Progress: 3/35 (8.6%) completed
+2026-07-09 13:33:50,627 - INFO - [AFLplusplus_ImageMagick] ✓ Completed successfully in 690.09s
+2026-07-09 13:33:50,629 - INFO - [clang_curl] Starting: clang on curl
+2026-07-09 13:33:50,631 - INFO - Progress: 4/35 (11.4%) completed
+2026-07-09 13:36:46,137 - INFO - [clang_curl] ✓ Completed successfully in 175.50s
+2026-07-09 13:36:46,139 - INFO - [clang_fastfetch] Starting: clang on fastfetch
+2026-07-09 13:36:46,139 - INFO - Progress: 5/35 (14.3%) completed
+2026-07-09 13:40:12,752 - INFO - [clang_fastfetch] ✓ Completed successfully in 206.61s
+2026-07-09 13:40:12,753 - INFO - [clang_ImageMagick] Starting: clang on ImageMagick
+2026-07-09 13:40:12,754 - INFO - Progress: 6/35 (17.1%) completed
+2026-07-09 13:45:02,375 - INFO - [AFLplusplus_radare2] ✓ Completed successfully in 1001.12s
+2026-07-09 13:45:02,377 - INFO - [clang_masscan] Starting: clang on masscan
+2026-07-09 13:45:02,377 - INFO - Progress: 7/35 (20.0%) completed
+2026-07-09 13:46:39,058 - INFO - [clang_masscan] ✓ Completed successfully in 96.68s
+2026-07-09 13:46:39,059 - INFO - [clang_radare2] Starting: clang on radare2
+2026-07-09 13:46:39,060 - INFO - Progress: 8/35 (22.9%) completed
+2026-07-09 13:53:32,268 - INFO - [clang_ImageMagick] ✓ Completed successfully in 799.51s
+2026-07-09 13:53:32,270 - INFO - [infer_checkstyle] Starting: infer on checkstyle
+2026-07-09 13:53:32,271 - INFO - Progress: 9/35 (25.7%) completed
+2026-07-09 14:01:53,668 - INFO - [clang_radare2] ✓ Completed successfully in 914.60s
+2026-07-09 14:01:53,670 - INFO - [infer_closer-compiler] Starting: infer on closer-compiler
+2026-07-09 14:01:53,670 - INFO - Progress: 10/35 (28.6%) completed
+2026-07-09 14:07:10,206 - INFO - [infer_checkstyle] ✓ Completed successfully in 817.93s
+2026-07-09 14:07:10,208 - INFO - [infer_jmh] Starting: infer on jmh
+2026-07-09 14:07:10,208 - INFO - Progress: 11/35 (31.4%) completed
+2026-07-09 14:15:42,446 - INFO - [infer_closer-compiler] ✓ Completed successfully in 828.77s
+2026-07-09 14:15:42,448 - INFO - [infer_saxon] Starting: infer on saxon
+2026-07-09 14:15:42,448 - INFO - Progress: 12/35 (34.3%) completed
+2026-07-09 14:17:32,209 - INFO - [infer_jmh] ✓ Completed successfully in 622.00s
+2026-07-09 14:17:32,211 - INFO - [infer_tika] Starting: infer on tika
+2026-07-09 14:17:32,212 - INFO - Progress: 13/35 (37.1%) completed
+2026-07-09 14:26:38,510 - INFO - [infer_tika] ✓ Completed successfully in 546.29s
+2026-07-09 14:26:38,512 - INFO - [jvm-tools_checkstyle] Starting: jvm-tools on checkstyle
+2026-07-09 14:26:38,513 - INFO - Progress: 14/35 (40.0%) completed
+2026-07-09 14:30:53,102 - INFO - [infer_saxon] ✓ Completed successfully in 910.65s
+2026-07-09 14:30:53,104 - INFO - [jvm-tools_closer-compiler] Starting: jvm-tools on closer-compiler
+2026-07-09 14:30:53,104 - INFO - Progress: 15/35 (42.9%) completed
+2026-07-09 14:37:37,273 - INFO - [jvm-tools_checkstyle] ✓ Completed successfully in 658.76s
+2026-07-09 14:37:37,274 - INFO - [jvm-tools_jmh] Starting: jvm-tools on jmh
+2026-07-09 14:37:37,274 - INFO - Progress: 16/35 (45.7%) completed
+2026-07-09 14:37:40,447 - INFO - [jvm-tools_closer-compiler] ✓ Completed successfully in 407.34s
+2026-07-09 14:37:40,449 - INFO - [jvm-tools_saxon] Starting: jvm-tools on saxon
+2026-07-09 14:37:40,450 - INFO - Progress: 17/35 (48.6%) completed
+2026-07-09 14:44:36,375 - INFO - [jvm-tools_saxon] ✓ Completed successfully in 415.92s
+2026-07-09 14:44:36,377 - INFO - [jvm-tools_tika] Starting: jvm-tools on tika
+2026-07-09 14:44:36,377 - INFO - Progress: 18/35 (51.4%) completed
+2026-07-09 14:44:45,502 - INFO - [jvm-tools_jmh] ✓ Completed successfully in 428.23s
+2026-07-09 14:44:45,503 - INFO - [klee_curl] Starting: klee on curl
+2026-07-09 14:44:45,503 - INFO - Progress: 19/35 (54.3%) completed
+2026-07-09 14:51:05,182 - INFO - [klee_curl] ✓ Completed successfully in 379.67s
+2026-07-09 14:51:05,184 - INFO - [klee_fastfetch] Starting: klee on fastfetch
+2026-07-09 14:51:05,185 - INFO - Progress: 20/35 (57.1%) completed
+2026-07-09 14:55:13,358 - INFO - [jvm-tools_tika] ✓ Completed successfully in 636.98s
+2026-07-09 14:55:13,360 - INFO - [klee_ImageMagick] Starting: klee on ImageMagick
+2026-07-09 14:55:13,361 - INFO - Progress: 21/35 (60.0%) completed
+2026-07-09 14:57:37,543 - INFO - [klee_fastfetch] ✓ Completed successfully in 392.35s
+2026-07-09 14:57:37,545 - INFO - [klee_masscan] Starting: klee on masscan
+2026-07-09 14:57:37,545 - INFO - Progress: 22/35 (62.9%) completed
+2026-07-09 15:05:21,569 - INFO - [klee_ImageMagick] ✓ Completed successfully in 608.20s
+2026-07-09 15:05:21,571 - INFO - [klee_radare2] Starting: klee on radare2
+2026-07-09 15:05:21,572 - INFO - Progress: 23/35 (65.7%) completed
+2026-07-09 15:06:30,412 - INFO - [klee_masscan] ✓ Completed successfully in 532.86s
+2026-07-09 15:06:30,414 - INFO - [WALA_checkstyle] Starting: WALA on checkstyle
+2026-07-09 15:06:30,415 - INFO - Progress: 24/35 (68.6%) completed
+2026-07-09 15:15:11,991 - INFO - [klee_radare2] ✓ Completed successfully in 590.42s
+2026-07-09 15:15:11,993 - INFO - [WALA_closer-compiler] Starting: WALA on closer-compiler
+2026-07-09 15:15:11,993 - INFO - Progress: 25/35 (71.4%) completed
+2026-07-09 15:33:41,751 - INFO - [WALA_closer-compiler] ✓ Completed successfully in 1109.75s
+2026-07-09 15:33:41,752 - INFO - [WALA_jmh] Starting: WALA on jmh
+2026-07-09 15:33:41,753 - INFO - Progress: 26/35 (74.3%) completed
+2026-07-09 15:35:45,804 - INFO - [WALA_checkstyle] ✓ Completed successfully in 1755.39s
+2026-07-09 15:35:45,804 - INFO - [WALA_saxon] Starting: WALA on saxon
+2026-07-09 15:35:45,806 - INFO - Progress: 27/35 (77.1%) completed
+2026-07-09 15:43:55,430 - INFO - [WALA_saxon] ✓ Completed successfully in 489.62s
+2026-07-09 15:43:55,430 - INFO - [WALA_tika] Starting: WALA on tika
+2026-07-09 15:43:55,431 - INFO - Progress: 28/35 (80.0%) completed
+2026-07-09 15:50:33,273 - INFO - [WALA_tika] ✓ Completed successfully in 397.84s
+2026-07-09 15:50:33,275 - INFO - [cFlow_curl] Starting: cFlow on curl
+2026-07-09 15:50:33,275 - INFO - Progress: 29/35 (82.9%) completed
+2026-07-09 15:54:34,621 - INFO - [cFlow_curl] ✓ Completed successfully in 241.34s
+2026-07-09 15:54:34,623 - INFO - [cFlow_fastfetch] Starting: cFlow on fastfetch
+2026-07-09 15:54:34,623 - INFO - Progress: 30/35 (85.7%) completed
+2026-07-09 15:54:59,073 - INFO - [WALA_jmh] ✓ Completed successfully in 1277.32s
+2026-07-09 15:54:59,075 - INFO - [cFlow_ImageMagick] Starting: cFlow on ImageMagick
+2026-07-09 15:54:59,076 - INFO - Progress: 31/35 (88.6%) completed
+2026-07-09 15:58:11,830 - INFO - [cFlow_fastfetch] ✓ Completed successfully in 217.20s
+2026-07-09 15:58:11,830 - INFO - [cFlow_masscan] Starting: cFlow on masscan
+2026-07-09 15:58:11,831 - INFO - Progress: 32/35 (91.4%) completed
+2026-07-09 15:59:01,913 - INFO - [cFlow_ImageMagick] ✓ Completed successfully in 242.83s
+2026-07-09 15:59:01,914 - INFO - [cFlow_radare2] Starting: cFlow on radare2
+2026-07-09 15:59:01,914 - INFO - Progress: 33/35 (94.3%) completed
+2026-07-09 16:03:07,125 - INFO - [cFlow_masscan] ✓ Completed successfully in 295.29s
+2026-07-09 16:03:07,127 - INFO - Progress: 34/35 (97.1%) completed
+2026-07-09 16:05:51,178 - INFO - [cFlow_radare2] ✓ Completed successfully in 409.26s
+2026-07-09 16:05:51,181 - INFO - Progress: 35/35 (100.0%) completed
+2026-07-09 16:05:51,187 - INFO - Batch execution finished in 10475.55s
+2026-07-09 16:05:51,188 - INFO - Saving results...
+2026-07-09 16:05:51,195 - INFO - Results saved to batch_results_toolcall_full_20260709T131115Z/batch_results_20260709_160551.json
