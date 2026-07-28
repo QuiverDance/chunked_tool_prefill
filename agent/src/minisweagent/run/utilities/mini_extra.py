@@ -14,6 +14,11 @@ subcommands = [
     ("minisweagent.run.utilities.config", ["config"], "Manage the global config file"),
     ("minisweagent.run.utilities.inspector", ["inspect", "i", "inspector"], "Run inspector (browse trajectories)"),
     ("minisweagent.run.replay", ["replay"], "Replay trajectories as fixed TTFT serving workloads"),
+    (
+        "minisweagent.run.extra.incremental_replay",
+        ["incremental-replay"],
+        "Replay trajectories with incremental tool-result prefill",
+    ),
     ("minisweagent.run.benchmarks.swebench", ["swebench"], "Evaluate on SWE-bench (batch mode)"),
     ("minisweagent.run.benchmarks.swebench_pro", ["swebench-pro"], "Evaluate on SWE-bench Pro public instances"),
     ("minisweagent.run.benchmarks.swebench_single", ["swebench-single"], "Evaluate on SWE-bench (single instance)"),

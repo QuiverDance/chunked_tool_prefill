@@ -48,6 +48,7 @@ DEFAULT_CACHE_BLOCK_TOKENS = 16
 DEFAULT_PREFILL_SAFETY_TAIL_TOKENS = 0
 DEFAULT_CANDIDATE_TOP_K = 4
 DEFAULT_TIME_SCALE = 1.0
+DEFAULT_PREFILL_DRAIN_TIMEOUT_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class TraceToolCall:
     duration_s: float
     output_events: list[dict[str, Any]]
     missing_timing: bool
+    completion_offset_s: float | None = None
 
     @property
     def raw_output(self) -> str:
@@ -85,6 +87,7 @@ class ReplayTurn:
     trace_completion_tokens: int
     has_next_assistant: bool
     next_turn_follows_tools: bool
+    replay_history_after: list[dict[str, Any]] | None
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,19 @@ class AsyncPrefillWorker:
             self.condition.notify()
             return True
 
+    def submit_latest(self, request: AsyncPrefillRequest) -> tuple[bool, int]:
+        """Keep active work, but replace queued requests with the newest cumulative prefix."""
+        with self.condition:
+            if self.error is not None:
+                raise self.error
+            if self.closed:
+                return False, 0
+            replaced = len(self.pending)
+            self.pending.clear()
+            self.pending.append(request)
+            self.condition.notify()
+            return True, replaced
+
     def snapshot(self) -> dict[str, Any]:
         with self.condition:
             active_request = self.active_request
@@ -183,7 +199,7 @@ class AsyncPrefillWorker:
         with self.condition:
             request = self.active_request
             self.pending.clear()
-            if request is None:
+            if request is None or request.request_id in self.cancelled_request_ids:
                 return {
                     "active_prefill_cancel_requested_at_tool_end": 0,
                     "active_prefill_cancel_latency_s": None,
@@ -227,12 +243,16 @@ class AsyncPrefillWorker:
             return removed
         return removed + 1
 
-    def stop_without_drain(self) -> None:
+    def stop_and_wait(self, timeout: float = DEFAULT_PREFILL_DRAIN_TIMEOUT_S) -> None:
+        self.cancel_active()
         with self.condition:
             self.closed = True
             self.pending.clear()
             self.condition.notify_all()
-        self.thread.join(timeout=0.1)
+        self.thread.join(timeout=max(0.0, timeout))
+        if self.thread.is_alive():
+            raise ReplayError("prefill_worker_drain_timeout")
+        self.raise_if_error()
 
     def run(self) -> None:
         while True:
@@ -284,6 +304,59 @@ class AsyncPrefillWorker:
                 return
 
 
+def empty_tool_stats(trace_tools: list[TraceToolCall], total_duration_s: float) -> dict[str, Any]:
+    return {
+        "tool_call_count": len(trace_tools),
+        "simulated_tool_duration_s": total_duration_s,
+        "tool_output_chars": sum(len(tool.raw_output) for tool in trace_tools),
+        "tool_output_events": sum(len(tool.output_events) for tool in trace_tools),
+        "missing_tool_timing_count": sum(1 for tool in trace_tools if tool.missing_timing),
+        "prefill_count": 0,
+        "prefill_submitted_count": 0,
+        "prefill_started_count": 0,
+        "prefill_completed_count": 0,
+        "prefill_completed_prompt_tokens": 0,
+        "prefilled_prompt_suffix_tokens": 0,
+        "prefilled_tool_output_tokens": 0,
+        "unprefilled_prompt_suffix_tokens": None,
+        "unprefilled_tool_output_tokens": None,
+        "prefill_active_at_tool_end": 0,
+        "prefill_pending_at_tool_end": 0,
+        "prefill_coalesced_count": 0,
+        "active_prefill_prefix_len_at_tool_end": None,
+        "pending_prefill_prefix_len_at_tool_end": None,
+        "active_prefill_cancel_requested_at_tool_end": 0,
+        "active_prefill_cancel_latency_s": None,
+        "active_prefill_cancel_error": "",
+    }
+
+
+def finalize_prefill_stats(
+    stats: dict[str, Any],
+    worker: AsyncPrefillWorker,
+    prefill_seed: ToolPrefillSeed,
+    *,
+    tool_end: float,
+) -> None:
+    completed = [completion for completion in worker.completed_prefills() if completion.finished_at <= tool_end]
+    completed_prefix_len = max(
+        (completion.prefix_len for completion in completed),
+        default=prefill_seed.cached_prefix_len,
+    )
+    stats["prefill_completed_count"] = len(completed)
+    stats["prefill_completed_prompt_tokens"] = completed_prefix_len
+    stats["prefilled_prompt_suffix_tokens"] = max(
+        0,
+        completed_prefix_len - prefill_seed.cached_prefix_len,
+    )
+    stats["prefilled_tool_output_tokens"] = max(
+        0,
+        completed_prefix_len - prefill_seed.seed_prefix_len,
+    )
+    stats.update(worker.snapshot())
+    stats.update(worker.cancel_active())
+
+
 class ReplayTokenizer:
     def __init__(self, tokenizer: Any):
         if tokenizer is None:
@@ -309,6 +382,14 @@ class ReplayTokenizer:
     ) -> PromptTokenState:
         text = self.render_messages(messages, add_generation_prompt=add_generation_prompt)
         return PromptTokenState(text=text, token_ids=self.encode_prompt_text(text))
+
+    def encode_messages_preserving_tool_result_order(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        add_generation_prompt: bool,
+    ) -> PromptTokenState:
+        return self.encode_messages_with_state(messages, add_generation_prompt=add_generation_prompt)
 
     def render_messages(self, messages: list[dict[str, Any]], *, add_generation_prompt: bool) -> str:
         clean_messages = api_messages(messages)
@@ -362,6 +443,22 @@ class MistralReplayTokenizer(ReplayTokenizer):
         *,
         add_generation_prompt: bool,
     ) -> PromptTokenState:
+        _, request = self._prepare_chat_completion_request(
+            messages,
+            add_generation_prompt=add_generation_prompt,
+        )
+        if request is None:
+            return PromptTokenState(text="", token_ids=[])
+
+        encoded = self.tokenizer.encode_chat_completion(request)
+        return PromptTokenState(text="", token_ids=list(encoded.tokens))
+
+    def _prepare_chat_completion_request(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        add_generation_prompt: bool,
+    ) -> tuple[list[dict[str, Any]], Any | None]:
         try:
             from mistral_common.protocol.instruct.request import (
                 ChatCompletionRequest,
@@ -373,7 +470,7 @@ class MistralReplayTokenizer(ReplayTokenizer):
 
         clean_messages = mistral_safe_messages(api_messages(messages))
         if not clean_messages:
-            return PromptTokenState(text="", token_ids=[])
+            return clean_messages, None
 
         request = ChatCompletionRequest(
             model="mistral-small",
@@ -381,8 +478,61 @@ class MistralReplayTokenizer(ReplayTokenizer):
             tools=convert_openai_tools([BASH_TOOL]),
             continue_final_message=not add_generation_prompt and clean_messages[-1].get("role") == "assistant",
         )
-        encoded = self.tokenizer.encode_chat_completion(request)
+        return clean_messages, request
+
+    def encode_messages_preserving_tool_result_order(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        add_generation_prompt: bool,
+    ) -> PromptTokenState:
+        clean_messages, request = self._prepare_chat_completion_request(
+            messages,
+            add_generation_prompt=add_generation_prompt,
+        )
+        if request is None:
+            return PromptTokenState(text="", token_ids=[])
+
+        if not any(message.get("role") == "tool" for message in clean_messages):
+            encoded = self.tokenizer.encode_chat_completion(request)
+            return PromptTokenState(text="", token_ids=list(encoded.tokens))
+
+        instruct_request = self._normalize_chat_completion_request(request)
+        self._restore_tool_result_order(instruct_request.messages, clean_messages)
+        encoded = self.tokenizer.instruct_tokenizer.encode_instruct(instruct_request)
         return PromptTokenState(text="", token_ids=list(encoded.tokens))
+
+    def _normalize_chat_completion_request(self, request: Any) -> Any:
+        """Run the same validation and normalization as Mistral's public chat encoder."""
+        validated = self.tokenizer._chat_completion_request_validator.validate_request(request)
+        return self.tokenizer._instruct_request_normalizer.from_chat_completion_request(validated)
+
+    @staticmethod
+    def _restore_tool_result_order(normalized_messages: list[Any], source_messages: list[dict[str, Any]]) -> None:
+        """Undo Mistral's tool-call-order sort so completed results remain append-only."""
+        try:
+            from mistral_common.protocol.instruct.messages import ToolMessage
+        except ImportError as e:
+            raise ReplayError("missing_mistral_common") from e
+
+        source_result_ids = [
+            str(message["tool_call_id"])
+            for message in source_messages
+            if message.get("role") == "tool" and message.get("tool_call_id") is not None
+        ]
+        normalized_results = [message for message in normalized_messages if isinstance(message, ToolMessage)]
+        result_by_id = {message.tool_call_id: message for message in normalized_results}
+        if (
+            len(source_result_ids) != len(normalized_results)
+            or len(result_by_id) != len(normalized_results)
+            or set(source_result_ids) != set(result_by_id)
+        ):
+            raise ReplayError("mistral_tool_result_order_mismatch")
+
+        ordered_results = iter(result_by_id[tool_call_id] for tool_call_id in source_result_ids)
+        for index, message in enumerate(normalized_messages):
+            if isinstance(message, ToolMessage):
+                normalized_messages[index] = next(ordered_results)
 
     def render_messages(self, messages: list[dict[str, Any]], *, add_generation_prompt: bool) -> str:
         state = self.encode_messages_with_state(messages, add_generation_prompt=add_generation_prompt)
@@ -399,7 +549,7 @@ class TraceReplayRunner:
         tokenizer: ReplayTokenizer,
         config: dict[str, Any],
         *,
-        algorithm: ReplayAlgorithm,
+        algorithm: str,
         max_context_tokens: int | None = None,
         prefill_min_new_tokens: int = DEFAULT_PREFILL_MIN_NEW_TOKENS,
         prefill_chunk_tokens: int | None = None,
@@ -462,7 +612,7 @@ class TraceReplayRunner:
                 history.extend(turn.leading_messages)
 
             if next_prompt_state is None:
-                prompt_state = self.tokenizer.encode_messages_with_state(history, add_generation_prompt=True)
+                prompt_state = self.encode_messages_with_state(history, add_generation_prompt=True)
             else:
                 prompt_state = next_prompt_state
                 next_prompt_state = None
@@ -502,7 +652,7 @@ class TraceReplayRunner:
                     actions=turn.actions,
                     trace_tools=turn.trace_tools,
                     candidate_history=candidate_history,
-                    prefill_enabled=self.algorithm in {"chunked", "candidate"} and turn.has_next_assistant,
+                    prefill_enabled=self.prefill_enabled_for_turn(turn),
                 )
             except ReplayError as e:
                 measurement.valid = False
@@ -514,13 +664,11 @@ class TraceReplayRunner:
 
             tool_stats = tool_phase.stats
             prefill_seed = tool_phase.prefill_seed
-            final_tool_messages = self.observation_messages(turn.actions, [tool.output for tool in turn.trace_tools])
+            final_tool_messages = self.final_tool_messages(turn)
             final_messages = history_after_assistant + final_tool_messages
             final_prompt_state = None
             if prefill_seed is not None and turn.has_next_assistant:
-                final_prompt_state = self.tokenizer.encode_messages_with_state(
-                    final_messages, add_generation_prompt=True
-                )
+                final_prompt_state = self.encode_messages_with_state(final_messages, add_generation_prompt=True)
                 unprefilled_suffix_tokens = max(
                     0,
                     len(final_prompt_state.token_ids)
@@ -550,10 +698,14 @@ class TraceReplayRunner:
                     )
                 )
 
-            history = final_messages
-            if final_prompt_state is not None and turn.next_turn_follows_tools:
-                next_prompt_state = final_prompt_state
+            if turn.replay_history_after is not None:
+                history = copy.deepcopy(turn.replay_history_after)
+                next_prompt_state = None
             else:
+                history = final_messages
+            if turn.replay_history_after is None and final_prompt_state is not None and turn.next_turn_follows_tools:
+                next_prompt_state = final_prompt_state
+            elif turn.replay_history_after is None:
                 next_prompt_state = None
 
         problem_e2e_s = self.now() - started_at
@@ -564,6 +716,23 @@ class TraceReplayRunner:
             problem_e2e_s=problem_e2e_s,
             completed_all_turns=completed_all_turns,
         )
+
+    def prefill_enabled_for_turn(self, turn: ReplayTurn) -> bool:
+        return self.algorithm in {"chunked", "candidate"} and turn.has_next_assistant
+
+    def encode_messages_with_state(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        add_generation_prompt: bool,
+    ) -> PromptTokenState:
+        return self.tokenizer.encode_messages_with_state(
+            messages,
+            add_generation_prompt=add_generation_prompt,
+        )
+
+    def final_tool_messages(self, turn: ReplayTurn) -> list[dict[str, Any]]:
+        return self.observation_messages(turn.actions, [tool.output for tool in turn.trace_tools])
 
     def measure_model_call(
         self,
@@ -601,7 +770,7 @@ class TraceReplayRunner:
         *,
         cached_prompt_ids: list[int],
     ) -> ToolPrefillSeed:
-        seed_state = self.tokenizer.encode_messages_with_state(history_after_assistant, add_generation_prompt=False)
+        seed_state = self.encode_messages_with_state(history_after_assistant, add_generation_prompt=False)
         return ToolPrefillSeed(
             cached_prefix_len=align_down(
                 common_prefix_length(cached_prompt_ids, seed_state.token_ids),
@@ -624,29 +793,7 @@ class TraceReplayRunner:
         prefill_enabled: bool,
     ) -> ToolPhaseResult:
         total_duration = sum(max(0.0, tool.duration_s) for tool in trace_tools)
-        stats = {
-            "tool_call_count": len(trace_tools),
-            "simulated_tool_duration_s": total_duration,
-            "tool_output_chars": sum(len(tool.raw_output) for tool in trace_tools),
-            "tool_output_events": sum(len(tool.output_events) for tool in trace_tools),
-            "missing_tool_timing_count": sum(1 for tool in trace_tools if tool.missing_timing),
-            "prefill_count": 0,
-            "prefill_submitted_count": 0,
-            "prefill_started_count": 0,
-            "prefill_completed_count": 0,
-            "prefill_completed_prompt_tokens": 0,
-            "prefilled_prompt_suffix_tokens": 0,
-            "prefilled_tool_output_tokens": 0,
-            "unprefilled_prompt_suffix_tokens": None,
-            "unprefilled_tool_output_tokens": None,
-            "prefill_active_at_tool_end": 0,
-            "prefill_pending_at_tool_end": 0,
-            "active_prefill_prefix_len_at_tool_end": None,
-            "pending_prefill_prefix_len_at_tool_end": None,
-            "active_prefill_cancel_requested_at_tool_end": 0,
-            "active_prefill_cancel_latency_s": None,
-            "active_prefill_cancel_error": "",
-        }
+        stats = empty_tool_stats(trace_tools, total_duration)
         if not prefill_enabled or not trace_tools:
             self.sleep_scaled(total_duration)
             return ToolPhaseResult(stats=stats, prefill_seed=None)
@@ -737,26 +884,10 @@ class TraceReplayRunner:
 
             tool_end = phase_deadline if phase_deadline is not None else self.now()
             worker.raise_if_error()
-            completed = [completion for completion in worker.completed_prefills() if completion.finished_at <= tool_end]
-            completed_prefix_len = max(
-                (completion.prefix_len for completion in completed),
-                default=prefill_seed.cached_prefix_len,
-            )
-            stats["prefill_completed_count"] = len(completed)
-            stats["prefill_completed_prompt_tokens"] = completed_prefix_len
-            stats["prefilled_prompt_suffix_tokens"] = max(
-                0,
-                completed_prefix_len - prefill_seed.cached_prefix_len,
-            )
-            stats["prefilled_tool_output_tokens"] = max(
-                0,
-                completed_prefix_len - prefill_seed.seed_prefix_len,
-            )
-            stats.update(worker.snapshot())
-            stats.update(worker.cancel_active())
+            finalize_prefill_stats(stats, worker, prefill_seed, tool_end=tool_end)
             return ToolPhaseResult(stats=stats, prefill_seed=prefill_seed)
         finally:
-            worker.stop_without_drain()
+            worker.stop_and_wait()
 
     def simulate_candidate_tool_phase(
         self,
@@ -925,6 +1056,14 @@ def prepare_replay_scenario(path: Path, data: dict[str, Any]) -> ReplayScenario:
         role = message.get("role")
         if role == "exit":
             break
+        replay_invalid_reason = (message.get("extra") or {}).get("replay_invalid_reason")
+        if replay_invalid_reason:
+            return ReplayScenario(
+                path=path,
+                instance_id=instance_id,
+                turns=turns,
+                terminal_invalid=invalid_record(path, instance_id, step_index, str(replay_invalid_reason)),
+            )
         if not is_assistant_message(message):
             leading_messages.append(copy.deepcopy(message))
             index += 1
@@ -956,6 +1095,7 @@ def prepare_replay_scenario(path: Path, data: dict[str, Any]) -> ReplayScenario:
                 trace_completion_tokens=trace_completion_tokens,
                 has_next_assistant=next_index is not None,
                 next_turn_follows_tools=next_index == after_tools_index,
+                replay_history_after=copy.deepcopy((assistant.get("extra") or {}).get("replay_history_after")),
             )
         )
         leading_messages = []
@@ -967,7 +1107,7 @@ def prepare_replay_scenario(path: Path, data: dict[str, Any]) -> ReplayScenario:
 
 def records_from_measurements(
     scenario: ReplayScenario,
-    algorithm: ReplayAlgorithm,
+    algorithm: str,
     measurements: list[StepMeasurement],
 ) -> list[dict[str, Any]]:
     return [record_from_measurement(scenario, algorithm, measurement) for measurement in measurements]
@@ -975,7 +1115,7 @@ def records_from_measurements(
 
 def record_from_measurement(
     scenario: ReplayScenario,
-    algorithm: ReplayAlgorithm,
+    algorithm: str,
     measurement: StepMeasurement,
 ) -> dict[str, Any]:
     turn = measurement.turn
@@ -1034,9 +1174,15 @@ def trace_tool_calls(
     assistant_message: dict[str, Any],
 ) -> list[TraceToolCall]:
     calls = []
+    messages_by_call_id = {
+        str(message["tool_call_id"]): message for message in tool_messages if message.get("tool_call_id") is not None
+    }
     previous_timestamp = number((assistant_message.get("extra") or {}).get("timestamp"))
-    for index, _ in enumerate(actions):
-        message = tool_messages[index] if index < len(tool_messages) else {}
+    for index, action in enumerate(actions):
+        call_id = action.get("tool_call_id")
+        message = messages_by_call_id.get(str(call_id)) if call_id is not None else None
+        if message is None:
+            message = tool_messages[index] if index < len(tool_messages) else {}
         output = output_from_tool_message(message)
         metric = tool_metric_for_message(message)
         timestamp = number((message.get("extra") or {}).get("timestamp"))
@@ -1053,6 +1199,7 @@ def trace_tool_calls(
                 duration_s=duration,
                 output_events=normalize_output_events(events, duration, len(str(output.get("output") or ""))),
                 missing_timing=metric is None,
+                completion_offset_s=number(metric.get("completion_offset_s")) if metric else None,
             )
         )
         previous_timestamp = timestamp if timestamp is not None else previous_timestamp
@@ -1200,13 +1347,13 @@ def tool_messages_after(messages: list[dict[str, Any]], start: int) -> list[dict
 
 
 def is_assistant_message(message: dict[str, Any]) -> bool:
-    return message.get("role") == "assistant"
+    return message.get("role") == "assistant" and (message.get("extra") or {}).get("replay", True)
 
 
 def next_assistant_index(messages: list[dict[str, Any]], start: int) -> int | None:
     for index in range(start, len(messages)):
         role = messages[index].get("role")
-        if role == "assistant":
+        if is_assistant_message(messages[index]):
             return index
         if role == "exit":
             return None
@@ -1357,7 +1504,7 @@ def bool_config(config: dict[str, Any], key: str, default: bool) -> bool:
     return bool(value)
 
 
-def runner_kwargs(config: dict[str, Any], *, algorithm: ReplayAlgorithm) -> dict[str, Any]:
+def runner_kwargs(config: dict[str, Any], *, algorithm: str) -> dict[str, Any]:
     replay_config = config.get("replay") or {}
     candidate_config = replay_config.get("candidate_prefill") or {}
     cache_block_tokens = int_config(replay_config, "cache_block_tokens", DEFAULT_CACHE_BLOCK_TOKENS)
@@ -1438,6 +1585,7 @@ def main(
     records: list[dict[str, Any]] = []
     invalid_records: list[dict[str, Any]] = []
     for trajectory_path in trajectory_files:
+        backend.reset_prefix_cache()
         data: dict[str, Any] | None = None
         try:
             data = first_data if trajectory_path == trajectory_files[0] else load_trajectory(trajectory_path)

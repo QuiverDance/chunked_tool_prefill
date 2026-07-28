@@ -2,7 +2,10 @@ import json
 import threading
 import time
 
+import pytest
+
 from minisweagent.run.replay import (
+    AsyncPrefillWorker,
     ReplayTokenizer,
     TraceReplayRunner,
     collect_trajectory_files,
@@ -15,6 +18,7 @@ from minisweagent.run.replay import (
 from minisweagent.run.replay_backend import completion_chunk_has_generated_payload
 from minisweagent.run.replay_messages import tokenizer_safe_messages
 from minisweagent.run.replay_metrics import record_for_output
+from minisweagent.run.replay_types import AsyncPrefillRequest, ReplayError, ReplayStep
 
 
 def make_trajectory(raw_output: str = "trace-output") -> dict:
@@ -205,6 +209,7 @@ class FakeBackend:
         self.generations = []
         self.prefills = []
         self.cancelled_prefills = []
+        self.prefix_cache_resets = 0
 
     def generate_tokens(self, token_ids, *, max_tokens, cache_salt, step, label):
         text = bytes(token_ids).decode("utf-8")
@@ -232,6 +237,9 @@ class FakeBackend:
     def cancel_prefill(self, request_id):
         self.cancelled_prefills.append(request_id)
 
+    def reset_prefix_cache(self):
+        self.prefix_cache_resets += 1
+
 
 class BlockingPrefillBackend(FakeBackend):
     def __init__(self):
@@ -252,6 +260,58 @@ class BlockingPrefillBackend(FakeBackend):
     def cancel_prefill(self, request_id):
         super().cancel_prefill(request_id)
         self.release.set()
+
+
+class SlowlyStoppingPrefillBackend(FakeBackend):
+    def __init__(self):
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def prefill(self, token_ids, *, cache_salt, step, label, request_id=None):
+        self.started.set()
+        self.release.wait()
+
+
+def test_prefill_worker_waits_until_a_cancelled_request_has_stopped():
+    backend = SlowlyStoppingPrefillBackend()
+    worker = AsyncPrefillWorker(backend)
+    request = AsyncPrefillRequest(
+        token_ids=[1],
+        cache_salt="session-a",
+        step=ReplayStep(instance_id="session-a", step_index=0),
+        label="test",
+        request_id="prefill-a",
+    )
+    worker.submit(request)
+    assert backend.started.wait(timeout=1)
+    worker.cancel_active()
+    threading.Timer(0.05, backend.release.set).start()
+
+    worker.stop_and_wait(timeout=1)
+
+    assert not worker.thread.is_alive()
+
+
+def test_prefill_worker_reports_a_drain_timeout():
+    backend = SlowlyStoppingPrefillBackend()
+    worker = AsyncPrefillWorker(backend)
+    request = AsyncPrefillRequest(
+        token_ids=[1],
+        cache_salt="session-a",
+        step=ReplayStep(instance_id="session-a", step_index=0),
+        label="test",
+        request_id="prefill-a",
+    )
+    worker.submit(request)
+    assert backend.started.wait(timeout=1)
+    worker.cancel_active()
+
+    with pytest.raises(ReplayError, match="prefill_worker_drain_timeout"):
+        worker.stop_and_wait(timeout=0.01)
+
+    backend.release.set()
+    worker.thread.join(timeout=1)
 
 
 def make_runner(backend, data, *, algorithm="baseline", clock=None, **kwargs):
@@ -769,6 +829,7 @@ def test_record_output_keeps_only_core_metrics():
         "skip_reason": "",
         "trace_ttft_s": 0.2,
         "replay_ttft_s": 0.3,
+        "prefill_coalesced_count": 2,
         "candidate_selected_count": 4,
         "internal_debug_counter": 100,
     }
@@ -776,6 +837,7 @@ def test_record_output_keeps_only_core_metrics():
     compact = record_for_output(record)
 
     assert "trace_ttft_s" in compact
+    assert compact["prefill_coalesced_count"] == 2
     assert compact["candidate_selected_count"] == 4
     assert "internal_debug_counter" not in compact
 
@@ -837,3 +899,4 @@ def test_replay_cli_writes_outputs(tmp_path, monkeypatch):
     assert len(results) == 2
     assert invalid == []
     assert summary["valid"] == 2
+    assert backend.prefix_cache_resets == 1

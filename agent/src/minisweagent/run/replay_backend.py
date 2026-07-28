@@ -25,6 +25,7 @@ class HttpReplayBackend:
         self.model_name = served_model_name(model_name)
         self.prefill_url = prefill_url
         self.prefill_abort_url = f"{prefill_url.rstrip('/')}/abort" if prefill_url else ""
+        self.prefix_cache_reset_url = f"{prefill_url.rstrip('/')}/reset" if prefill_url else ""
         self.completion_url = completion_url or f"{api_base.rstrip('/')}/completions"
         self.timeout = timeout
         self.ignore_eos = ignore_eos
@@ -68,6 +69,16 @@ class HttpReplayBackend:
             raise ReplayError(f"prefill_cancel_failed:{type(e).__name__}") from e
         if response.status_code >= 400:
             raise ReplayError(f"prefill_cancel_failed:{response.status_code}:{response.text[:500]}")
+
+    def reset_prefix_cache(self) -> None:
+        if not self.prefix_cache_reset_url:
+            raise ReplayError("missing_prefix_cache_reset_url")
+        try:
+            response = requests.post(self.prefix_cache_reset_url, timeout=30)
+        except requests.RequestException as e:
+            raise ReplayError(f"prefix_cache_reset_failed:{type(e).__name__}") from e
+        if response.status_code >= 400:
+            raise ReplayError(f"prefix_cache_reset_failed:{response.status_code}:{response.text[:500]}")
 
     def generate_tokens(
         self,

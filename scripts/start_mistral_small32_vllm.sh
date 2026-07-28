@@ -3,8 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/runs/vllm"
-VLLM_ENV="$ROOT_DIR/.conda/vllm-py312"
-VLLM_BIN="$VLLM_ENV/bin/vllm"
+VLLM_ENV="${VLLM_ENV:-$ROOT_DIR/.conda/vllm-py312}"
+if [[ ! -x "$VLLM_ENV/bin/vllm" ]]; then
+  VLLM_ENV="/data/pjw7200/src/mini-swe-agent/.venv"
+fi
+VLLM_PYTHON="$VLLM_ENV/bin/python"
 MODEL_DIR="/home/pjw7200/models/Mistral-Small-3.2-24B-Instruct-2506"
 SERVED_MODEL_NAME="mistral-small32-24b"
 HOST="127.0.0.1"
@@ -33,20 +36,21 @@ start_server() {
   CONDA_PREFIX="$VLLM_ENV" \
   CONDA_DEFAULT_ENV="$VLLM_ENV" \
   PATH="$VLLM_ENV/bin:$PATH" \
+  PYTHONPATH="$ROOT_DIR/scripts:$ROOT_DIR/agent/src${PYTHONPATH:+:$PYTHONPATH}" \
   PYTHONNOUSERSITE=1 \
-  setsid "$VLLM_BIN" serve "$MODEL_DIR" \
+  setsid "$VLLM_PYTHON" -m vllm.entrypoints.cli.main serve "$MODEL_DIR" \
     --host "$HOST" \
     --port "$port" \
     --served-model-name "$SERVED_MODEL_NAME" \
     --dtype bfloat16 \
     --max-model-len "$MAX_MODEL_LEN" \
     --tokenizer-mode mistral \
-    --config-format mistral \
-    --load-format mistral \
+    --load-format auto \
     --enable-prefix-caching \
     --enable-auto-tool-choice \
     --tool-call-parser mistral \
     --language-model-only \
+    --middleware vllm_prefill_middleware.prefill_middleware \
     > "$log_file" 2>&1 < /dev/null &
 
   echo "$!" > "$pid_file"

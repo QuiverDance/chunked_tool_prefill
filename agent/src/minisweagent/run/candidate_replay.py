@@ -42,7 +42,7 @@ class CandidatePrefillWorker(Protocol):
 
     def raise_if_error(self) -> None: ...
 
-    def stop_without_drain(self) -> None: ...
+    def stop_and_wait(self) -> None: ...
 
 
 class CandidateReplayHost(Protocol):
@@ -276,7 +276,7 @@ class CandidateToolPrefillPhase:
             )
             return stats
         finally:
-            worker.stop_without_drain()
+            worker.stop_and_wait()
 
     def prepare(
         self,
