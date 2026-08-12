@@ -47,6 +47,7 @@ start_server() {
     --tokenizer-mode mistral \
     --load-format auto \
     --enable-prefix-caching \
+    --enable-prompt-tokens-details \
     --enable-auto-tool-choice \
     --tool-call-parser mistral \
     --language-model-only \

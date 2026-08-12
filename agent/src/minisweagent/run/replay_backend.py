@@ -162,7 +162,8 @@ def completion_chunk_has_generated_payload(chunk: dict[str, Any]) -> bool:
 def cached_tokens_from_chunk(chunk: dict[str, Any], current: int | None) -> int | None:
     usage = chunk.get("usage") or {}
     details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
-    return details.get("cached_tokens", current)
+    value = details.get("cached_tokens")
+    return value if isinstance(value, int) else current
 
 
 def prompt_tokens_from_chunk(chunk: dict[str, Any], current: int | None) -> int | None:

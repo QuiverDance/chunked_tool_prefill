@@ -5,3 +5,5 @@
 /logs/
 /reports/
 /hosted_vllm__*.json
+__pycache__/
+*.py[cod]
